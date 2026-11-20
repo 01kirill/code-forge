@@ -1,0 +1,15 @@
+services:
+  education-worker:
+    environment:
+      JUDGE_URL: http://judge-fixture:2358
+      JUDGE_AUTH_TOKEN: ""
+      JUDGE_TRUSTED_LIMITS: "false"
+    depends_on:
+      judge-fixture: {condition: service_started}
+  judge-fixture:
+    image: codeforge-backend:local
+    working_dir: /fixtures
+    networks: [data]
+    volumes:
+      - ./tests/judge_stub.py:/fixtures/judge_stub.py:ro
+    command: ["uvicorn", "judge_stub:app", "--host", "0.0.0.0", "--port", "2358", "--no-access-log"]

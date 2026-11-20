@@ -1,0 +1,14 @@
+.git
+.agents
+docs
+.local
+.env
+.venv
+**/__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache
+graphify-out
+frontend/node_modules
+frontend/dist
+frontend/test-results

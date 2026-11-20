@@ -1,0 +1,60 @@
+[project]
+name = "codeforge"
+version = "0.1.0"
+description = "Programming courses and private coding contests"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aio-pika>=9.5,<10",
+    "alembic>=1.16,<2",
+    "asyncpg>=0.30,<1",
+    "bcrypt>=4.3,<6",
+    "fastapi>=0.116,<1",
+    "httpx>=0.28,<1",
+    "pydantic[email]>=2.11,<3",
+    "pyjwt[crypto]>=2.10,<3",
+    "pymongo>=4.13,<5",
+    "redis>=6,<8",
+    "sqlalchemy>=2.0,<2.1",
+    "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16,<2",
+    "pre-commit>=4.2,<5",
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=1,<2",
+    "ruff>=0.12,<1",
+    "asyncpg-stubs",
+]
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app/codeforge"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app", "tests", "migrations", "scripts"]
+check_untyped_defs = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["integration: requires the local Compose stack"]

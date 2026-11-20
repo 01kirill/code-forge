@@ -1,0 +1,53 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked mypy
+      - run: uv run --locked pytest -m 'not integration'
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.20.2"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  integration:
+    runs-on: ubuntu-latest
+    env:
+      SECURE_COOKIE: "false"
+      CODEFORGE_TEST_URL: http://localhost:8080
+      CODEFORGE_TEST_ADMIN: admin@example.com
+      CODEFORGE_ADMIN_PASSWORD: integration-admin-only-42
+      CODEFORGE_DEMO_PASSWORD: integration-demo-only-42
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: ./scripts/setup.sh
+      - run: docker compose -f compose.yml -f compose.test.yml up --build -d
+      - run: |
+          for tries in $(seq 1 40); do
+            if curl -fsS http://localhost:8080/api/edu/courses >/dev/null; then break; fi
+            sleep 2
+          done
+          docker compose exec -T -e CODEFORGE_ADMIN_PASSWORD auth python -m codeforge.auth.bootstrap --name test_admin --email "$CODEFORGE_TEST_ADMIN"
+          uv run --locked python scripts/seed_demo.py --admin "$CODEFORGE_TEST_ADMIN"
+          uv run --locked pytest -m integration

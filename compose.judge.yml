@@ -1,0 +1,75 @@
+services:
+  education-worker:
+    environment:
+      JUDGE_URL: http://judge-server:2358
+      JUDGE_AUTH_TOKEN: ${JUDGE_AUTH_TOKEN:?run scripts/setup.sh first}
+    networks: [data, execution]
+  judge-server:
+    image: codeforge-judge:1.13.1
+    build:
+      context: .
+      dockerfile: deploy/judge.Dockerfile
+    privileged: true
+    networks: [execution, judge-data]
+    environment: &judge-env
+      POSTGRES_HOST: judge-db
+      POSTGRES_DB: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: ${JUDGE_DB_PASSWORD:?run scripts/setup.sh first}
+      REDIS_HOST: judge-redis
+      REDIS_PASSWORD: ${JUDGE_REDIS_PASSWORD:?run scripts/setup.sh first}
+      SECRET_KEY_BASE: ${JUDGE_SECRET:?run scripts/setup.sh first}
+      AUTHN_TOKEN: ${JUDGE_AUTH_TOKEN:?run scripts/setup.sh first}
+      JUDGE0_TELEMETRY_ENABLE: "false"
+      ENABLE_NETWORK: "false"
+      ALLOW_ENABLE_NETWORK: "false"
+      ENABLE_BATCHED_SUBMISSIONS: "true"
+      ENABLE_CALLBACKS: "false"
+      ENABLE_ADDITIONAL_FILES: "false"
+      MAX_CPU_TIME_LIMIT: "10"
+      MAX_WALL_TIME_LIMIT: "12"
+      MAX_MEMORY_LIMIT: "262144"
+      COUNT: "2"
+    depends_on:
+      judge-db: {condition: service_healthy}
+      judge-redis: {condition: service_started}
+    restart: unless-stopped
+  judge-sandbox:
+    image: codeforge-judge:1.13.1
+    build:
+      context: .
+      dockerfile: deploy/judge.Dockerfile
+    command: ["./scripts/workers"]
+    privileged: true
+    networks: [judge-data]
+    environment: *judge-env
+    depends_on:
+      judge-db: {condition: service_healthy}
+      judge-server: {condition: service_started}
+    restart: unless-stopped
+  judge-db:
+    image: postgres:16-alpine
+    networks: [judge-data]
+    environment:
+      POSTGRES_USER: judge0
+      POSTGRES_DB: judge0
+      POSTGRES_PASSWORD: ${JUDGE_DB_PASSWORD:?run scripts/setup.sh first}
+    volumes: [judge-pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "judge0"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  judge-redis:
+    image: redis:7.4-alpine
+    networks: [judge-data]
+    environment:
+      REDIS_PASSWORD: ${JUDGE_REDIS_PASSWORD:?run scripts/setup.sh first}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+networks:
+  execution:
+    internal: true
+  judge-data:
+    internal: true
+volumes:
+  judge-pg:

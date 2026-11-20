@@ -1,0 +1,136 @@
+x-python: &python
+  build:
+    context: .
+    dockerfile: deploy/python.Dockerfile
+  image: codeforge-backend:local
+  restart: unless-stopped
+  networks: [data]
+  environment: &app-env
+    JWT_PUBLIC_KEY: /keys/public.pem
+    REDIS_URL: redis://:${REDIS_PASSWORD:?run scripts/setup.sh first}@redis:6379/0
+    RABBIT_URL: amqp://codeforge:${RABBIT_PASSWORD:?run scripts/setup.sh first}@rabbit/
+    MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+    INTERNAL_KEY: ${INTERNAL_KEY:?run scripts/setup.sh first}
+    SECURE_COOKIE: ${SECURE_COOKIE:-true}
+  volumes: &public-key
+    - ./.local/keys/public.pem:/keys/public.pem:ro
+  depends_on: &app-deps
+    redis: {condition: service_healthy}
+    rabbit: {condition: service_healthy}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    networks: [data]
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?run scripts/setup.sh first}
+      AUTH_PASSWORD: ${AUTH_PASSWORD:?run scripts/setup.sh first}
+      CONTEST_PASSWORD: ${CONTEST_PASSWORD:?run scripts/setup.sh first}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./deploy/postgres-init.sh:/docker-entrypoint-initdb.d/01-codeforge.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 35
+  mongo:
+    image: mongo:7.0
+    networks: [data]
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes: [mongo:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { if (!rs.status().ok) quit(1) } catch (e) { if (e.code === 94) rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}); quit(1) }; if (!db.hello().isWritablePrimary) quit(1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 35
+  redis:
+    image: redis:7.4-alpine
+    networks: [data]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?run scripts/setup.sh first}
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes: [redis:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 25
+  rabbit:
+    image: rabbitmq:3.13-alpine
+    hostname: rabbit
+    networks: [data]
+    environment:
+      RABBITMQ_DEFAULT_USER: codeforge
+      RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?run scripts/setup.sh first}
+    volumes: [rabbit:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 8s
+      retries: 25
+
+  auth:
+    <<: *python
+    environment:
+      <<: *app-env
+      AUTH_DB: postgresql://auth:${AUTH_PASSWORD}@postgres/auth
+      JWT_PRIVATE_KEY: /keys/private.pem
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - ./.local/keys/public.pem:/keys/public.pem:ro
+      - ./.local/keys/private.pem:/keys/private.pem:ro
+    command: ["sh", "-c", "alembic -n auth upgrade head && exec uvicorn codeforge.auth.api:app --host 0.0.0.0 --port 8000 --no-access-log --log-level warning"]
+    depends_on:
+      <<: *app-deps
+      postgres: {condition: service_healthy}
+  education-api:
+    <<: *python
+    command: ["uvicorn", "codeforge.education.api:app", "--host", "0.0.0.0", "--port", "8000", "--ws", "websockets", "--ws-ping-interval", "25", "--no-access-log", "--log-level", "warning"]
+    depends_on:
+      <<: *app-deps
+      mongo: {condition: service_healthy}
+  education-worker:
+    <<: *python
+    command: ["python", "-m", "codeforge.education.worker"]
+    environment:
+      <<: *app-env
+      JUDGE_URL: ${JUDGE_URL:-http://judge-server:2358}
+      JUDGE_TRUSTED_LIMITS: ${JUDGE_TRUSTED_LIMITS:-false}
+      JUDGE_AUTH_TOKEN: ${JUDGE_AUTH_TOKEN:-}
+    depends_on:
+      <<: *app-deps
+      mongo: {condition: service_healthy}
+  contest:
+    <<: *python
+    environment:
+      <<: *app-env
+      CONTEST_DB: postgresql://contest:${CONTEST_PASSWORD}@postgres/contest
+      EDUCATION_URL: http://education-api:8000
+    command: ["sh", "-c", "alembic -n contest upgrade head && exec uvicorn codeforge.contest.api:app --host 0.0.0.0 --port 8000 --ws websockets --ws-ping-interval 25 --no-access-log --log-level warning"]
+    depends_on:
+      <<: *app-deps
+      postgres: {condition: service_healthy}
+  gateway:
+    image: codeforge-gateway:local
+    build:
+      context: .
+      dockerfile: deploy/gateway.Dockerfile
+      network: ${CODEFORGE_BUILD_NETWORK:-default}
+    networks: [edge, data]
+    ports:
+      - "${CODEFORGE_BIND:-127.0.0.1}:${CODEFORGE_PORT:-8443}:443"
+      - "127.0.0.1:${CODEFORGE_DEV_PORT:-8080}:80"
+    volumes:
+      - ./.local/tls:/etc/nginx/tls:ro
+    restart: unless-stopped
+
+networks:
+  edge:
+  data:
+    internal: true
+volumes:
+  postgres:
+  mongo:
+  redis:
+  rabbit:
