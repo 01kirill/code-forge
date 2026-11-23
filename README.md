@@ -35,6 +35,21 @@ uv run python scripts/seed_demo.py --admin admin@example.com
 
 В тестовом режиме браузер открывает [http://localhost:8080](http://localhost:8080). При параллельном запуске двух стендов задайте свободные `CODEFORGE_PORT` и `CODEFORGE_DEV_PORT`.
 
+Чтобы запустить этот тестовый стенд на VPS и открыть HTTPS снаружи, используйте полную команду из каталога проекта.
+
+```sh
+CODEFORGE_BIND=0.0.0.0 docker compose -p codeforge-test -f compose.yml \
+  -f compose.test.yml up -d --build
+```
+
+`CODEFORGE_BIND` задаёт адрес привязки HTTPS (по умолчанию порт 8443). Два `-f` объединяют базовую конфигурацию и тестовую подмену Judge0. `-p codeforge-test` даёт стенду отдельное имя. `up -d --build` собирает образы и запускает весь стенд в фоне. Если дописать `gateway`, Compose запустит только nginx, так как он не объявляет зависимости от API и других сервисов.
+
+Чтобы остановить и удалить контейнеры этого стенда, укажите то же имя и файлы.
+
+```sh
+docker compose -p codeforge-test -f compose.yml -f compose.test.yml down
+```
+
 ## Проверки
 
 ```sh

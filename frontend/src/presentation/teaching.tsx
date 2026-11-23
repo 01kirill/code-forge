@@ -11,7 +11,6 @@ import {
   moveItem,
   typeNames,
   type AuthorQuestion,
-  type Course,
   type CourseCard,
   type CourseFields,
   type Gradebook,
@@ -196,6 +195,7 @@ function BackToTeaching() {
 
 type ModuleDraft = { title: string; lessons: (LessonDraft & { id: string })[] }
 type AuthorCourse = CourseFields & { slug: string; modules: ModuleDraft[] }
+type TaskChoice = Pick<TaskMetadata, 'task_id' | 'title'>
 const blankCourse: AuthorCourse = {
   slug: '',
   title: '',
@@ -217,20 +217,41 @@ export function CourseStudio() {
     <EditCourse key="new" original={blankCourse} />
   ) : (
     <Data state={state}>
-      {(course) => <EditCourse key={slug} original={course} reload={state.reload} />}
+      {(course) => (
+        <EditCourse key={slug} original={course} reload={state.reload} onSave={state.set} />
+      )}
     </Data>
   )
 }
 
-function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () => void }) {
+function EditCourse({
+  original,
+  reload,
+  onSave,
+}: {
+  original: AuthorCourse
+  reload?: () => void
+  onSave?: (course: AuthorCourse) => void
+}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const action = useAction()
   const [draft, setDraft] = useState(original)
-  const [topics, setTopics] = useState(original.topics.join('\n'))
-  const [lesson, setLesson] = useState<{ module: number; doc?: LessonDraft & { id: string } }>()
+  const [topicName, setTopicName] = useState('')
+  const [lesson, setLesson] = useState<{
+    module: number
+    doc?: LessonDraft & { id: string }
+    practice?: boolean
+  }>()
   const [saved, setSaved] = useState(false)
   const exists = Boolean(original.slug)
+  const topicsChanged = JSON.stringify(draft.topics) !== JSON.stringify(original.topics)
+  const newTopic = topicName.trim()
+  const canAddTopic =
+    Boolean(newTopic) && !draft.topics.includes(newTopic) && draft.topics.length < 30
+  const usedTopics = new Set(
+    original.modules.flatMap((module) => module.lessons.map((item) => item.topic)),
+  )
   // After a lesson mutation the server owns IDs. Retain unsaved text and course preferences.
   const [source, setSource] = useState(original)
   if (source !== original) {
@@ -241,29 +262,38 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
     setDraft({ ...draft, ...fields })
     setSaved(false)
   }
+  function canAddLesson(index: number) {
+    return (
+      !action.busy &&
+      !topicsChanged &&
+      original.topics.length > 0 &&
+      original.modules[index]?.title === draft.modules[index].title
+    )
+  }
   function patchModule(index: number, replacement: ModuleDraft) {
     patch({ modules: draft.modules.map((item, i) => (i === index ? replacement : item)) })
+  }
+  function addTopic() {
+    if (!canAddTopic) return
+    patch({ topics: [...draft.topics, newTopic] })
+    setTopicName('')
   }
   async function save(event: FormEvent) {
     await action.run(async () => {
       const payload = {
         ...draft,
-        topics: topics
-          .split('\n')
-          .map((value) => value.trim())
-          .filter(Boolean),
         modules: draft.modules.map((module) => ({
           title: module.title,
           lessons: module.lessons.map((item) => item.id),
         })),
       }
-      const course = await api<Course>(exists ? `/edu/courses/${original.slug}` : '/edu/courses', {
+      const course = await api<AuthorCourse>(exists ? `/edu/courses/${original.slug}` : '/edu/courses', {
         method: exists ? 'PATCH' : 'POST',
         body: payload,
       })
       if (!exists) navigate(`/teach/courses/${course.slug}`, { replace: true })
       else {
-        reload?.()
+        onSave?.(course)
         setSaved(true)
       }
     }, event)
@@ -311,11 +341,54 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
               onChange={(e) => patch({ description: e.target.value })}
             />
           </label>
-          <label>
-            {t('Topics (one per line)')}
-            <textarea value={topics} onChange={(e) => setTopics(e.target.value)} />
-          </label>
         </div>
+        <fieldset className="stack picker">
+          <legend>{t('Lesson topics')}</legend>
+          <div className="row">
+            <label>
+              {t('Topic name')}
+              <input
+                value={topicName}
+                maxLength={120}
+                onChange={(e) => setTopicName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    addTopic()
+                  }
+                }}
+              />
+            </label>
+            <button type="button" disabled={!canAddTopic} onClick={addTopic}>
+              {t('Add topic')}
+            </button>
+          </div>
+          {draft.topics.length > 0 && (
+            <ul className="ordered-items">
+              {draft.topics.map((topic) => (
+                <li key={topic}>
+                  <strong>{topic}</strong>
+                  {usedTopics.has(topic) ? (
+                    <span>{t('Used in lessons')}</span>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={t('Remove topic {{name}}', { name: topic })}
+                      onClick={() => patch({ topics: draft.topics.filter((item) => item !== topic) })}
+                    >
+                      {t('Remove')}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {topicsChanged ? (
+            <p role="status">{t('Save the course to apply topic changes.')}</p>
+          ) : !original.topics.length ? (
+            <p>{t('Add a topic and save the course before adding lessons.')}</p>
+          ) : null}
+        </fieldset>
         <label className="check">
           <input
             type="checkbox"
@@ -356,6 +429,7 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
                 <li key={item.id}>
                   <strong>{item.title}</strong>
                   <span>{t(typeNames[item.type])}</span>
+                  <span>{item.topic}</span>
                   <select
                     value={index}
                     aria-label={`${t('Move to module')}: ${item.title}`}
@@ -391,22 +465,37 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
                       })
                     }
                   />
-                  <button type="button" onClick={() => setLesson({ doc: item, module: index })}>
+                  <button
+                    type="button"
+                    disabled={action.busy}
+                    onClick={() => setLesson({ doc: item, module: index })}
+                  >
                     {t('Edit')}
                   </button>
                 </li>
               ))}
             </ol>
             {exists && (
-              <button
-                type="button"
-                className="button"
-                disabled={original.modules[index]?.title !== module.title}
-                onClick={() => setLesson({ module: index })}
-              >
-                <Plus size={16} aria-hidden />
-                {t('Add lesson')}
-              </button>
+              <div className="row">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!canAddLesson(index)}
+                  onClick={() => setLesson({ module: index })}
+                >
+                  <Plus size={16} aria-hidden />
+                  {t('Add lesson')}
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={!canAddLesson(index)}
+                  onClick={() => setLesson({ module: index, practice: true })}
+                >
+                  <Plus size={16} aria-hidden />
+                  {t('Add practice lesson')}
+                </button>
+              </div>
             )}
           </fieldset>
         ))}
@@ -420,7 +509,7 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
         </button>
         <ErrorMessage error={action.error} />
         <div className="row">
-          <button className="button primary" disabled={action.busy}>
+          <button className="button primary" disabled={action.busy || Boolean(lesson)}>
             {t('Save')}
           </button>
           {exists && (
@@ -451,10 +540,11 @@ function EditCourse({ original, reload }: { original: AuthorCourse; reload?: () 
       </form>
       {lesson && (
         <LessonForm
-          key={lesson.doc?.id ?? `module-${lesson.module}`}
+          key={lesson.doc?.id ?? `${lesson.module}-${lesson.practice}`}
           course={original}
           module={lesson.module}
           original={lesson.doc}
+          practice={lesson.practice}
           close={(changed) => {
             setLesson(undefined)
             if (changed) reload?.()
@@ -510,26 +600,45 @@ function LessonForm({
   course,
   module,
   original,
+  practice,
   close,
 }: {
   course: AuthorCourse
   module: number
   original?: LessonDraft & { id: string }
+  practice?: boolean
   close: (changed: boolean) => void
 }) {
   const { t } = useTranslation()
   const action = useAction()
-  const bank = useLoad<TaskMetadata[]>('bank', () => api('/edu/tasks'))
   const [lesson, setLesson] = useState<LessonDraft>(
-    original ?? {
-      title: '',
-      topic: course.topics[0] ?? '',
-      type: 'theory',
-      body: '',
-    },
+    original ??
+      (practice
+        ? { title: '', topic: '', type: 'practice', task_id: '' }
+        : { title: '', topic: '', type: 'theory', body: '' }),
   )
+  const bank = useLoad<TaskChoice[]>('bank', () => api('/edu/tasks'), lesson.type === 'practice')
   const path = original ? `/edu/lessons/${original.id}` : '/edu/lessons'
   const [preview, setPreview] = useState(false)
+  const [creatingTask, setCreatingTask] = useState(false)
+  if (creatingTask && lesson.type === 'practice') {
+    return (
+      <section className="page-section">
+        <h2>
+          {t('New task')} · {lesson.topic}
+        </h2>
+        <EditTask
+          original={blankTask}
+          onCancel={() => setCreatingTask(false)}
+          onCreate={(task) => {
+            bank.set([...(bank.data ?? []), task])
+            setLesson({ ...lesson, title: lesson.title || task.title, task_id: task.task_id })
+            setCreatingTask(false)
+          }}
+        />
+      </section>
+    )
+  }
   return (
     <form
       className="panel stack page-section"
@@ -543,7 +652,9 @@ function LessonForm({
         }, e)
       }
     >
-      <h2>{original ? `${t('Edit')}: ${original.title}` : t('Add lesson')}</h2>
+      <h2>
+        {original ? `${t('Edit')}: ${original.title}` : t(practice ? 'Add practice lesson' : 'Add lesson')}
+      </h2>
       <div className="form-grid">
         <label>
           {t('Title')}
@@ -560,7 +671,7 @@ function LessonForm({
             value={lesson.topic}
             onChange={(e) => setLesson({ ...lesson, topic: e.target.value })}
           >
-            <option value="">{t('Topic')}</option>
+            <option value="">{t('Select a topic')}</option>
             {course.topics.map((topic) => (
               <option key={topic}>{topic}</option>
             ))}
@@ -615,29 +726,41 @@ function LessonForm({
         />
       )}
       {lesson.type === 'practice' && (
-        <Data state={bank}>
-          {(items) => (
-            <label>
-              {t('Select task')}
-              <select
-                required
-                value={lesson.task_id}
-                onChange={(e) => setLesson({ ...lesson, task_id: e.target.value })}
-              >
-                <option value="">{t('Select task')}</option>
-                {items.map((item) => (
-                  <option key={item.task_id} value={item.task_id}>
-                    {item.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-        </Data>
+        <>
+          <Data state={bank}>
+            {(items) => (
+              <label>
+                {t('Select task')}
+                <select
+                  required
+                  value={lesson.task_id}
+                  onChange={(e) => setLesson({ ...lesson, task_id: e.target.value })}
+                >
+                  <option value="">{t('Select task')}</option>
+                  {items.map((item) => (
+                    <option key={item.task_id} value={item.task_id}>
+                      {item.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </Data>
+          <button
+            type="button"
+            disabled={!lesson.topic || !bank.data || action.busy}
+            onClick={() => setCreatingTask(true)}
+          >
+            {t('Create task for this lesson')}
+          </button>
+        </>
       )}
       <ErrorMessage error={action.error} />
       <div className="row">
-        <button className="button primary" disabled={action.busy}>
+        <button
+          className="button primary"
+          disabled={action.busy || (lesson.type === 'practice' && !lesson.task_id)}
+        >
           {t('Save')}
         </button>
         <button type="button" onClick={() => close(false)}>
@@ -812,7 +935,17 @@ export function TaskStudio() {
   )
 }
 
-function EditTask({ id, original }: { id?: string; original: TaskDraft }) {
+function EditTask({
+  id,
+  original,
+  onCreate,
+  onCancel,
+}: {
+  id?: string
+  original: TaskDraft
+  onCreate?: (task: TaskChoice) => void
+  onCancel?: () => void
+}) {
   const { t } = useTranslation()
   const action = useAction()
   const navigate = useNavigate()
@@ -824,14 +957,23 @@ function EditTask({ id, original }: { id?: string; original: TaskDraft }) {
 
   return (
     <>
-      <BackToTeaching />
-      <PageHeading title={id ? original.title : t('New task')} />
+      {!onCreate && (
+        <>
+          <BackToTeaching />
+          <PageHeading title={id ? original.title : t('New task')} />
+          {!id && <p>{t('To choose a course topic, add a practice lesson in the course editor.')}</p>}
+        </>
+      )}
       <form
         className="panel stack"
         onSubmit={(e) =>
           void action.run(async () => {
-            await api(path, { method: id ? 'PATCH' : 'POST', body: draft })
-            navigate('/teach')
+            const task = await api<TaskChoice>(path, {
+              method: id ? 'PATCH' : 'POST',
+              body: draft,
+            })
+            if (onCreate) onCreate(task)
+            else navigate('/teach')
           }, e)
         }
       >
@@ -1010,8 +1152,13 @@ function EditTask({ id, original }: { id?: string; original: TaskDraft }) {
         <ErrorMessage error={action.error} />
         <div className="row">
           <button className="button primary" disabled={action.busy}>
-            {t('Save')}
+            {t(onCreate ? 'Save task to bank' : 'Save')}
           </button>
+          {onCancel && (
+            <button type="button" disabled={action.busy} onClick={onCancel}>
+              {t('Cancel')}
+            </button>
+          )}
           {id && (
             <button
               type="button"
