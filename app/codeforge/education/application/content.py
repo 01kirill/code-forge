@@ -138,7 +138,7 @@ class Content:
             old = None if create else await self.course(slug, tx)
             if old:
                 check_owner(user, old["author_id"])
-                self.check_revision(old, revision)
+                self.check_revision(old["revision"], revision)
             ids = [id_ for module in data["modules"] for id_ in module["lessons"]]
             if ids:
                 lessons = await tx.lessons(ids, course=slug)
@@ -170,8 +170,14 @@ class Content:
         return await self.structure(slug, user, author=True)
 
     @staticmethod
-    def check_revision(course: Document, revision: str | None) -> None:
-        if revision != course["revision"]:
+    def check_revision(
+        current: str, revision: str | None, *, task: bool = False
+    ) -> None:
+        if revision != current:
+            if task:
+                raise Problem(
+                    409, "task_conflict", "Задача изменилась. Обновите страницу"
+                )
             raise Problem(409, "course_conflict", "Курс изменился. Обновите страницу")
 
     async def delete_course(self, slug: str, user: User) -> None:
@@ -238,7 +244,12 @@ class Content:
         return public_task(task) | {"templates": templates}
 
     async def write_task(
-        self, task_id: str | None, user: User, spec: Document
+        self,
+        task_id: str | None,
+        user: User,
+        spec: Document,
+        *,
+        revision: str | None = None,
     ) -> Document:
         require_teacher(user)
         version = uuid4().hex
@@ -250,6 +261,7 @@ class Content:
                 old = await self.task(task_id, tx)
                 owner_id = old["author_id"]
                 check_owner(user, owner_id)
+                self.check_revision(old["id"], revision, task=True)
                 await tx.retire_task_version(old["id"])
             task = spec | {
                 "id": version,
@@ -339,7 +351,7 @@ class Content:
             course = await self.course(slug, tx)
             check_owner(user, course["author_id"])
             if revision is not None:
-                self.check_revision(course, revision)
+                self.check_revision(course["revision"], revision)
             modules = course["modules"]
             if lesson is None:
                 if course["published"] and sum(len(m["lessons"]) for m in modules) <= 1:

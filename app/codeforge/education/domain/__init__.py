@@ -40,14 +40,14 @@ def local_time(at: datetime, timezone: str) -> datetime:
     return at.astimezone(ZoneInfo(timezone))
 
 
-def streaks(days: list[str]) -> tuple[int, int]:
+def streaks(days: list[str], today: date) -> tuple[int, int]:
     previous = None
     current = best = 0
     for day in sorted({date.fromisoformat(value) for value in days}):
         current = current + 1 if previous and day - previous == timedelta(days=1) else 1
         best = max(current, best)
         previous = day
-    return current, best
+    return (current if previous and previous >= today - timedelta(days=1) else 0), best
 
 
 def percent(done: int, total: int) -> int | None:
@@ -78,7 +78,7 @@ def grant(
         if day not in days:
             days.append(day)
     solved = profile.get("solved", {})
-    _, best = streaks(profile.get("days", []))
+    _, best = streaks(profile.get("days", []), activity.date())
     earned = profile.setdefault("achievements", {})
     conditions = {
         "first": len(solved) >= 1,

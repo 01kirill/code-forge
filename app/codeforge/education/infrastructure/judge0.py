@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import binascii
+from itertools import batched
 from typing import Any
 
 import httpx
@@ -8,7 +9,9 @@ import httpx
 from codeforge.common.contracts import JUDGE_LANGUAGES, Document
 from codeforge.education.application.ports import JudgeUnavailable
 from codeforge.education.domain import Verdict
-from codeforge.education.domain.verdicts import Case, Execution
+from codeforge.education.domain.verdicts import Case, Execution, wall_seconds
+
+BATCH_SIZE = 20
 
 TERMINAL_STATUS = {
     3: Verdict.AC,
@@ -108,34 +111,37 @@ class Judge:
             "language_id": self.languages[language],
             "source_code": encode(code),
             "cpu_time_limit": time_limit,
-            "wall_time_limit": max(2, time_limit + 2),
+            "wall_time_limit": wall_seconds(task["time_ms"]),
             "memory_limit": task["memory_kb"],
             "max_processes_and_or_threads": 60,
             "max_file_size": 128,
             "enable_network": False,
         }
-        response = await self.request(
-            "POST",
-            "/submissions/batch",
-            params={"base64_encoded": "true"},
-            json={
-                "submissions": [
-                    base
-                    | {"stdin": encode(case.stdin)}
-                    | (
-                        {"expected_output": encode(case.expected)}
-                        if case.expected is not None
-                        else {}
-                    )
-                    for case in cases
-                ]
-            },
-        )
-        tokens = [entry.get("token") for entry in response.json()]
-        if len(tokens) != len(cases) or not all(
-            isinstance(token, str) for token in tokens
-        ):
-            raise JudgeUnavailable
+        tokens: list[str] = []
+        for batch in batched(cases, BATCH_SIZE):
+            response = await self.request(
+                "POST",
+                "/submissions/batch",
+                params={"base64_encoded": "true"},
+                json={
+                    "submissions": [
+                        base
+                        | {"stdin": encode(case.stdin)}
+                        | (
+                            {"expected_output": encode(case.expected)}
+                            if case.expected is not None
+                            else {}
+                        )
+                        for case in batch
+                    ]
+                },
+            )
+            received = [entry.get("token") for entry in response.json()]
+            if len(received) != len(batch) or not all(
+                isinstance(token, str) for token in received
+            ):
+                raise JudgeUnavailable
+            tokens.extend(received)
         return tokens
 
     async def collect(self, tokens: list[str]) -> list[Execution]:
@@ -145,20 +151,21 @@ class Judge:
             fields += ",limit_reason"
         while len(results) < len(tokens):
             pending = [token for token in tokens if token not in results]
-            response = await self.request(
-                "GET",
-                "/submissions/batch",
-                params={
-                    "tokens": ",".join(pending),
-                    "base64_encoded": "true",
-                    "fields": fields,
-                },
-            )
-            for row in response.json()["submissions"]:
-                if row and row.get("token") in pending and row["status"]["id"] > 2:
-                    if not self.trusted_limits:
-                        row.pop("limit_reason", None)
-                    results[row["token"]] = row
+            for batch in batched(pending, BATCH_SIZE):
+                response = await self.request(
+                    "GET",
+                    "/submissions/batch",
+                    params={
+                        "tokens": ",".join(batch),
+                        "base64_encoded": "true",
+                        "fields": fields,
+                    },
+                )
+                for row in response.json()["submissions"]:
+                    if row and row.get("token") in batch and row["status"]["id"] > 2:
+                        if not self.trusted_limits:
+                            row.pop("limit_reason", None)
+                        results[row["token"]] = row
             if len(results) < len(tokens):
                 await asyncio.sleep(0.2)
         return [execution(results[token]) for token in tokens]

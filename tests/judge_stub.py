@@ -5,7 +5,7 @@ from uuid import uuid4
 from codeforge.common.broker import Document
 from codeforge.common.contracts import JUDGE_LANGUAGES
 from codeforge.education.infrastructure.judge0 import encode
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 results: dict[str, Document] = {}
@@ -32,6 +32,8 @@ async def languages() -> list[Document]:
 
 @app.post("/submissions/batch", status_code=201)
 async def submit(data: Document) -> list[Document]:
+    if len(data["submissions"]) > 20:
+        raise HTTPException(status_code=400, detail="Batch limit is 20")
     registrations = []
     for case in data["submissions"]:
         token = uuid4().hex
@@ -59,6 +61,7 @@ async def submit(data: Document) -> list[Document]:
 
 @app.get("/submissions/batch")
 async def batch(tokens: str) -> Document:
-    return {
-        "submissions": [results.get(token) for token in reversed(tokens.split(","))]
-    }
+    batch_tokens = tokens.split(",")
+    if len(batch_tokens) > 20:
+        raise HTTPException(status_code=400, detail="Batch limit is 20")
+    return {"submissions": [results.get(token) for token in reversed(batch_tokens)]}

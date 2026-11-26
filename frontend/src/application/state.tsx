@@ -9,17 +9,19 @@ import {
 } from 'react'
 
 import type { Identity, LiveEvent } from '../domain/models'
-import { ApiError, connect, session } from '../infrastructure/api'
+import { ApiError, type SessionTransport } from './transport'
 
 type SessionState = { user: Identity | null; ready: boolean; error: unknown; reload: () => void }
-const SessionContext = createContext<SessionState>({
-  user: null,
-  ready: false,
-  error: null,
-  reload: () => {},
-})
+const SessionContext = createContext<(SessionState & SessionTransport) | null>(null)
 
-export function SessionProvider({ children }: { children: ReactNode }) {
+export function SessionProvider({
+  children,
+  transport,
+}: {
+  children: ReactNode
+  transport: SessionTransport
+}) {
+  const { session } = transport
   const token = useSyncExternalStore(session.subscribe, session.get)
   const [ready, setReady] = useState(false)
   const [identity, setIdentity] = useState<Identity | null>(null)
@@ -50,11 +52,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     // Ready marks the initial refresh. It must not trigger a second refresh after logout.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, revision])
+  }, [token, revision, session])
 
   return (
     <SessionContext.Provider
       value={{
+        ...transport,
         user: token ? identity : null,
         ready: ready && (!token || identity !== null || sessionError !== null),
         error: sessionError,
@@ -69,7 +72,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   )
 }
 
-export const useSession = () => useContext(SessionContext)
+export function useSession(): SessionState {
+  return useSessionContext()
+}
+
+function useSessionContext(): SessionState & SessionTransport {
+  const context = useContext(SessionContext)
+  if (!context) throw new Error('SessionProvider is required')
+  return context
+}
 
 type Loading<T> = { data?: T; error?: unknown }
 export function useLoad<T>(key: string, load: () => Promise<T>, enabled = true) {
@@ -109,6 +120,7 @@ export function useLive(
   onEvent: (event: LiveEvent) => void,
   onReconnect?: () => void,
 ) {
+  const { session, connect } = useSessionContext()
   const token = useSyncExternalStore(session.subscribe, session.get)
   const [online, setOnline] = useState(true)
   const event = useRef(onEvent)
@@ -125,7 +137,7 @@ export function useLive(
         if (connected) restore.current?.()
       },
     )
-  }, [path, token])
+  }, [path, token, connect])
   return online
 }
 

@@ -57,10 +57,13 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run pytest -m 'not integration'
-uv run pre-commit install
+uv run --locked pre-commit install
 npm --prefix frontend ci
 npm --prefix frontend run build
 ```
+
+Pre-commit устанавливается один раз в каждой копии репозитория. Git хранит hook в `.git/hooks/pre-commit`. Для коммитов из IDE используйте ту же среду, где доступен `uv`.
+
 
 Для интеграционных тестов укажите `CODEFORGE_TEST_URL=http://localhost:8080`, `CODEFORGE_TEST_ADMIN=admin@example.com`, `CODEFORGE_ADMIN_PASSWORD` и `CODEFORGE_DEMO_PASSWORD`. Запустите `uv run pytest -m integration` на тестовом Compose из предыдущего раздела.
 
@@ -69,6 +72,10 @@ npm --prefix frontend run build
 Один [каталог](app/codeforge/common/judge_languages.json) задаёт языки курса, шаблоны задачи и язык отправки в уроках и соревнованиях. CodeForge поддерживает Python 3, C++, C, C#, Go, Java, JavaScript, Pascal, PHP, Rust, TypeScript и SQL (SQLite) в [Judge0 CE 1.13.1](https://github.com/judge0/judge0/blob/v1.13.1/db/languages/active.rb). На каждый язык приходится одна версия среды исполнения. Ограничение действует в CodeForge и не меняет состав образа Judge0. Для Java и C# проверьте лимиты памяти и времени задачи.
 
 Старые попытки остаются в истории. Если в задаче сохранились шаблоны удалённых языков, автор может скопировать их перед удалением и добавить поддерживаемый язык. В черновике соревнования повторно добавьте обновлённую задачу, чтобы заменить сохранённую версию.
+
+CodeForge отправляет и опрашивает тесты пакетами до 20. Общий бюджет проверки учитывает число тестов, лимит запуска и компиляцию из стандартного Compose.
+
+При редактировании задачи напрямую через API передайте полученную из `GET /api/edu/tasks/{id}` версию в заголовке `If-Match`. При конфликте версий сервер вернёт `409`.
 
 ## Judge0 на отдельном Droplet
 

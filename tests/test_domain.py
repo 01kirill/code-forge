@@ -1,7 +1,7 @@
 import csv
 import io
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -13,6 +13,7 @@ from codeforge.common.security import Tokens
 from codeforge.contest.domain import Cell, Rank, calculate_cell, phase, rank
 from codeforge.contest.presentation.schemas import ContestCode, RoomEdit
 from codeforge.education.application.content import Content
+from codeforge.education.application.judging import judging_budget
 from codeforge.education.domain import Verdict, grant, level, percent, streaks, task_xp
 from codeforge.education.domain.verdicts import Case, Execution, aggregate
 from codeforge.education.infrastructure.judge0 import Judge, encode, verdict
@@ -102,6 +103,53 @@ async def test_judge_catalog_accepts_each_source_language() -> None:
     assert submitted == [expected[key] for key in JUDGE_LANGUAGES]
 
 
+@pytest.mark.parametrize(
+    ("size", "batches"), [(20, [20]), (21, [20, 1]), (30, [20, 10])]
+)
+async def test_judge_sends_and_polls_bounded_batches(
+    size: int, batches: list[int]
+) -> None:
+    sent: list[int] = []
+    polled: list[int] = []
+    status = {"id": 3}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            length = len(json.loads(request.content)["submissions"])
+            first = sum(sent)
+            sent.append(length)
+            return httpx.Response(
+                201,
+                json=[{"token": str(index)} for index in range(first, first + length)],
+            )
+        tokens = request.url.params["tokens"].split(",")
+        polled.append(len(tokens))
+        return httpx.Response(
+            200,
+            json={
+                "submissions": [
+                    {"token": token, "status": status, "stdout": encode(token)}
+                    for token in reversed(tokens)
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://judge", transport=httpx.MockTransport(reply)
+    ) as client:
+        judge = Judge(client)
+        judge.languages = {"python": 71}
+        tokens = await judge.start(
+            {"time_ms": 1000, "memory_kb": 65536},
+            "python",
+            "print(3)",
+            [Case("", "3", True)] * size,
+        )
+        results = await judge.collect(tokens)
+    assert sent == polled == batches
+    assert [row.stdout for row in results] == [str(index) for index in range(size)]
+
+
 @pytest.mark.parametrize("schema", [Code, ContestCode])
 @pytest.mark.parametrize("language", ["ruby", "python2", "cpp-clang"])
 def test_removed_language_is_rejected(
@@ -187,8 +235,15 @@ def test_progress_awards_once_and_keeps_original_local_day() -> None:
 
 
 def test_streak_merges_late_and_duplicate_days() -> None:
-    assert streaks(["2026-11-21", "2026-11-20", "2026-11-20", "2026-11-24"]) == (1, 2)
-    assert streaks(["2026-11-22", "2026-11-20", "2026-11-21"]) == (3, 3)
+    days = ["2026-11-21", "2026-11-20", "2026-11-20", "2026-11-24"]
+    assert streaks(days, date(2026, 11, 24)) == (1, 2)
+    assert streaks(days, date(2026, 11, 25)) == (1, 2)
+    assert streaks(days, date(2026, 11, 26)) == (0, 2)
+    assert streaks([], date(2026, 11, 26)) == (0, 0)
+
+
+def test_judging_budget_covers_serial_compilation_and_execution() -> None:
+    assert judging_budget(10_000, 30) >= 30 * (12 + 12)
 
 
 @pytest.mark.parametrize(

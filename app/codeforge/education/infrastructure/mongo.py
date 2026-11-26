@@ -7,6 +7,7 @@ from pymongo.errors import DuplicateKeyError
 
 from codeforge.common.contracts import QUEUE_LIMIT, Document, User, check_queue
 from codeforge.education.application.ports import DuplicateCourse, EducationData
+from codeforge.education.domain.verdicts import JudgementResult
 
 
 def from_mongo(row: Document) -> Document:
@@ -371,7 +372,9 @@ class MongoEducationData:
             session=self.session,
         )
 
-    async def finish_submission(self, id_: str, result: Document) -> Document | None:
+    async def finish_submission(
+        self, id_: str, result: JudgementResult
+    ) -> Document | None:
         row = await self._submissions.find_one_and_update(
             {"_id": id_, "state": "queued"},
             {"$set": {"state": "done", "result": result}},
@@ -413,7 +416,9 @@ class MongoEducationData:
             session=self.session,
         )
 
-    async def finish_judgement(self, id_: str, lease: str, result: Document) -> bool:
+    async def finish_judgement(
+        self, id_: str, lease: str, result: JudgementResult
+    ) -> bool:
         update = await self._judgements.update_one(
             {"_id": id_, "lease": lease},
             {

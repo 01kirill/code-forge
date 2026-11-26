@@ -52,7 +52,7 @@ Courses = Annotated[Content, Depends(get_content)]
 Tracking = Annotated[Progress, Depends(get_progress)]
 Attempts = Annotated[Submissions, Depends(get_submissions)]
 Offset = Annotated[int, Query(ge=0, le=10000)]
-CourseRevision = Annotated[str | None, Header(alias="If-Match", max_length=34)]
+RevisionHeader = Annotated[str | None, Header(alias="If-Match", max_length=34)]
 
 
 @router.get("/courses")
@@ -97,7 +97,7 @@ async def edit_course(
     data: CourseEdit,
     service: Courses,
     user: CurrentUser,
-    revision: CourseRevision = None,
+    revision: RevisionHeader = None,
 ) -> Document:
     return await service.mutate_course(
         slug,
@@ -127,7 +127,7 @@ async def create_lesson(
     data: LessonCreate,
     service: Courses,
     user: CurrentUser,
-    revision: CourseRevision = None,
+    revision: RevisionHeader = None,
 ) -> Document:
     return await service.write_lesson(
         data.course_slug,
@@ -144,7 +144,7 @@ async def edit_lesson(
     data: Lesson,
     service: Courses,
     user: CurrentUser,
-    revision: CourseRevision = None,
+    revision: RevisionHeader = None,
 ) -> Document:
     slug = await service.lesson_slug(lesson_id)
     return await service.write_lesson(
@@ -163,7 +163,7 @@ async def delete_lesson(
     service: Courses,
     user: CurrentUser,
     response: Response,
-    revision: CourseRevision = None,
+    revision: RevisionHeader = None,
 ) -> None:
     change = await service.write_lesson(
         await service.lesson_slug(lesson_id),
@@ -213,9 +213,18 @@ async def create_task(data: TaskSpec, service: Courses, user: CurrentUser) -> Do
 
 @router.patch("/tasks/{task_id}")
 async def edit_task(
-    task_id: str, data: TaskSpec, service: Courses, user: CurrentUser
+    task_id: str,
+    data: TaskSpec,
+    service: Courses,
+    user: CurrentUser,
+    revision: RevisionHeader = None,
 ) -> Document:
-    return await service.write_task(task_id, user, data.model_dump())
+    return await service.write_task(
+        task_id,
+        user,
+        data.model_dump(),
+        revision=revision.strip('"') if revision else None,
+    )
 
 
 @router.delete("/tasks/{task_id}", status_code=204)

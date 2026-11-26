@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol, TypedDict
 
 from codeforge.common.contracts import Document, User
-from codeforge.education.domain.verdicts import Case, Execution
+from codeforge.education.domain.verdicts import Case, Execution, JudgementResult
 
 
 class DuplicateCourse(Exception):
@@ -34,7 +34,18 @@ class SubmissionDraft:
     stdin: str | None = None
 
 
-class EducationData(Protocol):
+class SubmissionResults(Protocol):
+    async def save_profile(self, profile: Document) -> None: ...
+    async def profile_for_result(self, user_id: str) -> Document | None: ...
+    def task_history(
+        self, user: str, task: str, after: int
+    ) -> AsyncIterator[Document]: ...
+    async def finish_submission(
+        self, id_: str, result: JudgementResult
+    ) -> Document | None: ...
+
+
+class EducationData(SubmissionResults, Protocol):
     async def course(self, slug: str) -> Document | None: ...
     async def courses(
         self, *, published_only: bool, author: str | None, language: str | None
@@ -66,14 +77,12 @@ class EducationData(Protocol):
     ) -> dict[str, set[str]]: ...
     async def find_profile(self, user_id: str) -> Document | None: ...
     async def add_profile(self, profile: Document) -> None: ...
-    async def save_profile(self, profile: Document) -> None: ...
     async def enroll(self, user: str, slug: str) -> None: ...
     def course_profiles(
         self, slug: str, offset: int, limit: int
     ) -> AsyncIterator[Document]: ...
     async def ranked_profiles(self, offset: int) -> list[Document]: ...
     async def next_sequence(self, user_id: str) -> int: ...
-    async def profile_for_result(self, user_id: str) -> Document | None: ...
     async def add_submission(self, attempt: Document) -> None: ...
     async def reserve_submission(self) -> None: ...
     async def queue_status(self) -> tuple[int, datetime | None]: ...
@@ -81,16 +90,10 @@ class EducationData(Protocol):
     async def submissions(
         self, user: str, task: str | None, offset: int
     ) -> list[Document]: ...
-    def task_history(
-        self, user: str, task: str, after: int
-    ) -> AsyncIterator[Document]: ...
     def due_submissions(self, at: datetime) -> AsyncIterator[Document]: ...
     async def schedule_dispatch(
         self, id_: str, previous: datetime, next_at: datetime
     ) -> None: ...
-    async def finish_submission(
-        self, id_: str, result: Document
-    ) -> Document | None: ...
 
 
 class EducationRepository(EducationData, Protocol):
@@ -116,6 +119,17 @@ class JudgementQueue(Protocol):
     async def publish(self, key: str, event: Document) -> None: ...
 
 
+class JudgeJob(TypedDict):
+    id: str
+    task_id: str
+    version: str
+    language: str
+    code: str
+    practice: bool
+    submitted_at: datetime
+    stdin: str | None
+
+
 class JudgeUnavailable(Exception):
     pass
 
@@ -137,5 +151,5 @@ class JudgementRepository(Protocol):
 
     async def save_tokens(self, id_: str, lease: str, tokens: list[str]) -> None: ...
     async def finish_judgement(
-        self, id_: str, lease: str, result: Document
+        self, id_: str, lease: str, result: JudgementResult
     ) -> bool: ...

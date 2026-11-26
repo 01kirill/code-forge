@@ -23,3 +23,9 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+      - id: frontend-typecheck
+        name: Frontend type check
+        entry: npm --prefix frontend run typecheck
+        language: system
+        files: '^(frontend/.*\.(ts|tsx|json)|app/codeforge/common/judge_languages\.json)$'
+        pass_filenames: false

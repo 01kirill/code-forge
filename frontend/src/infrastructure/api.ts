@@ -1,19 +1,7 @@
 import type { Identity, LiveEvent } from '../domain/models'
 
-type ErrorBody = {
-  code: string
-  detail: string
-  context?: Record<string, string>
-  errors?: { field: string; type: string }[]
-}
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    readonly body: ErrorBody,
-  ) {
-    super(body.detail)
-  }
-}
+import { ApiError, type ErrorBody } from '../application/transport'
+export { ApiError }
 
 const channel = new BroadcastChannel('codeforge.session')
 const listeners = new Set<() => void>()

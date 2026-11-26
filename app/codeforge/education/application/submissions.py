@@ -17,6 +17,7 @@ from codeforge.education.application.ports import (
     JudgementQueue,
     PracticeLimiter,
     SubmissionDraft,
+    SubmissionResults,
 )
 from codeforge.education.application.progress import Progress
 from codeforge.education.application.views import now
@@ -153,7 +154,9 @@ class Submissions:
             )
 
     async def apply_result(self, key: str, event: Document) -> None:
-        async def save(tx: EducationData) -> tuple[Document, Document | None] | None:
+        async def save(
+            tx: SubmissionResults,
+        ) -> tuple[Document, Document | None] | None:
             attempt = await tx.finish_submission(event["id"], event["result"])
             if attempt is None:
                 return None

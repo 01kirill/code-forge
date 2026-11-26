@@ -86,7 +86,7 @@ export type Task = TaskFields & {
   version: string
   examples: TestCase[]
 }
-export type TaskDraft = TaskFields & { tests: TestCase[] }
+export type TaskDraft = TaskFields & { tests: TestCase[]; version?: string }
 export type TaskMetadata = Pick<Task, 'task_id' | 'title' | 'difficulty'> & {
   languages: Language[]
 }

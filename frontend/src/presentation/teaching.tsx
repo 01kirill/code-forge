@@ -1005,6 +1005,7 @@ function EditTask({
             const task = await api<TaskChoice>(path, {
               method: id ? 'PATCH' : 'POST',
               body: draft,
+              headers: id ? { 'If-Match': `"${original.version}"` } : undefined,
             })
             if (onCreate) onCreate(task)
             else navigate('/teach')

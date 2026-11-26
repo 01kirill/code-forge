@@ -11,6 +11,7 @@ from codeforge.education.domain import (
     changes,
     grant,
     level,
+    local_time,
     percent,
     streaks,
 )
@@ -143,7 +144,9 @@ class Progress:
 
     async def personal(self, user: User) -> Document:
         profile = await self.store.profile(user)
-        current, best = streaks(profile.get("days", []))
+        current, best = streaks(
+            profile.get("days", []), local_time(now(), user.timezone).date()
+        )
         xp = profile["xp"]
         return {
             "id": user.id,

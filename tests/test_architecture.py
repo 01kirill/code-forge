@@ -1,4 +1,5 @@
 import ast
+import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
@@ -68,3 +69,27 @@ def test_service_dependencies_point_inward(service: str) -> None:
                     )
 
     assert not violations, "\n".join(violations)
+
+
+@pytest.mark.parametrize(
+    ("layer", "allowed"),
+    [("domain", {"domain"}), ("application", {"application", "domain"})],
+)
+def test_frontend_dependencies_point_inward(layer: str, allowed: set[str]) -> None:
+    source = SOURCE.parents[1] / "frontend" / "src"
+    imports_from = re.compile(
+        r"""(?:\bfrom\s+|\bimport\s*\(\s*|^\s*import\s+)['"](\.[^'"]+)['"]""",
+        re.MULTILINE,
+    )
+    files = [
+        *source.joinpath(layer).rglob("*.ts"),
+        *source.joinpath(layer).rglob("*.tsx"),
+    ]
+    assert files
+    for path in files:
+        for module in imports_from.findall(path.read_text(encoding="utf-8")):
+            target = (path.parent / module).resolve()
+            if target == SOURCE / "common" / "judge_languages.json":
+                continue
+            assert target.is_relative_to(source), (path, module)
+            assert target.relative_to(source).parts[0] in allowed, (path, module)

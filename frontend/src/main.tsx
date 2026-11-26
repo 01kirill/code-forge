@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 
 import './infrastructure/i18n'
+import { connect, session } from './infrastructure/api'
 import './styles.css'
 import { SessionProvider } from './application/state'
 import { Credentials, ProfilePage } from './presentation/account'
@@ -26,7 +27,7 @@ function NotFound() {
 
 createRoot(document.getElementById('root')!).render(
   <BrowserRouter>
-    <SessionProvider>
+    <SessionProvider transport={{ session, connect }}>
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Catalog />} />

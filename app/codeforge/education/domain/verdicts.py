@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import TypedDict
 
 from codeforge.common.contracts import Document
 from codeforge.education.domain import Verdict
@@ -28,7 +29,21 @@ class Execution:
     diagnostic: str = ""
 
 
-def aggregate(cases: list[Case], rows: list[Execution]) -> Document:
+class JudgementResult(TypedDict):
+    verdict: Verdict
+    passed: int
+    total: int
+    first_failed: int | None
+    time_ms: int | None
+    memory_kb: int | None
+    details: list[Document]
+
+
+def wall_seconds(time_ms: int) -> float:
+    return time_ms / 1000 + 2
+
+
+def aggregate(cases: list[Case], rows: list[Execution]) -> JudgementResult:
     if len(cases) != len(rows) or not rows:
         return technical()
     kinds = [row.verdict for row in rows]
@@ -73,7 +88,7 @@ def aggregate(cases: list[Case], rows: list[Execution]) -> Document:
     }
 
 
-def technical() -> Document:
+def technical() -> JudgementResult:
     return {
         "verdict": Verdict.TECHNICAL,
         "passed": 0,

@@ -146,10 +146,25 @@ async def test_javascript_course_and_stale_revision() -> None:
                 "time_ms": 1000,
                 "memory_kb": 65536,
                 "contest_ready": True,
-                "tests": [{"stdin": "", "expected": "3", "public": True}],
+                "tests": [{"stdin": "", "expected": "3", "public": True}] * 30,
             },
             201,
         )
+        task_path = f"/api/edu/tasks/{task['task_id']}"
+        initial_version = {"If-Match": f'"{task["version"]}"'}
+        edited = await teacher.patch(
+            task_path,
+            json=task | {"statement": "Print the number 3"},
+            headers=initial_version,
+        )
+        assert edited.status_code == 200, edited.text
+        for headers in (initial_version, {}):
+            stale = await teacher.patch(task_path, json=task, headers=headers)
+            assert stale.status_code == 409
+            assert stale.json()["code"] == "task_conflict"
+        assert (await get(teacher, f"/edu/tasks/{task['task_id']}"))[
+            "statement"
+        ] == "Print the number 3"
         lesson = await post_json(
             teacher,
             "/edu/lessons",
@@ -191,9 +206,9 @@ async def test_javascript_course_and_stale_revision() -> None:
             },
             202,
         )
-        assert (await await_result(learner, f"/edu/submissions/{attempt['id']}"))[
-            "verdict"
-        ] == "AC"
+        result = await await_result(learner, f"/edu/submissions/{attempt['id']}")
+        assert result["verdict"] == "AC"
+        assert result["passed"] == result["total"] == 30
 
         room = await post_json(
             learner,
