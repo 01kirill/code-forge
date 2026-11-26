@@ -18,6 +18,29 @@ import { languageSyntax, type Language } from '../domain/models'
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
 
+monaco.editor.defineTheme('codeforge-light', {
+  base: 'vs',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '28602B' },
+    { token: 'number', foreground: '176342' },
+    { token: 'annotation', foreground: '555555' },
+    { token: 'type', foreground: '006666' },
+    { token: 'string.sql', foreground: 'A31515' },
+    { token: 'operator.sql', foreground: '465568' },
+  ],
+  colors: {
+    'editor.background': '#E7E7E7',
+    'editorGutter.background': '#E7E7E7',
+    'editorLineNumber.foreground': '#53575E',
+    'editor.lineHighlightBackground': '#DBDDE2',
+    'editor.selectionBackground': '#BDCDE9',
+    'editorWidget.background': '#EDEDED',
+    'editorSuggestWidget.background': '#EDEDED',
+    'editorHoverWidget.background': '#EDEDED',
+  },
+})
+
 const snippets = {
   python: { print: 'print(${1:value})', input: 'input()', int: 'int(${1:value})' },
   cpp: { cout: "std::cout << ${1:value} << '\\n';", cin: 'std::cin >> ${1:value};' },
@@ -86,7 +109,9 @@ export default function CodeEditor({
     const model = instance.getModel()
     const listener = instance.onDidChangeModelContent(() => onEdit.current(instance.getValue()))
     const applyTheme = () =>
-      monaco.editor.setTheme(document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs')
+      monaco.editor.setTheme(
+        document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'codeforge-light',
+      )
     const observer = new MutationObserver(applyTheme)
     observer.observe(document.documentElement, {
       attributes: true,
