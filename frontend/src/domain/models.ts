@@ -1,4 +1,5 @@
-export type Language = 'python' | 'cpp'
+import judgeLanguages from "../../../app/codeforge/common/judge_languages.json"
+
 export type Role = 'student' | 'teacher' | 'admin'
 export type Identity = {
   id: string
@@ -9,7 +10,12 @@ export type Identity = {
   active: boolean
 }
 
-export const languageNames: Record<Language, string> = { python: 'Python', cpp: 'C++' }
+export type Language = keyof typeof judgeLanguages
+export const languages = Object.keys(judgeLanguages) as Language[]
+export const languageNames = Object.fromEntries(
+  languages.map((key) => [key, judgeLanguages[key].name]),
+) as Record<Language, string>
+export const languageSyntax = (language: Language) => judgeLanguages[language]?.syntax ?? 'plaintext'
 export const difficultyNames = { easy: 'Easy', medium: 'Medium', hard: 'Hard' } as const
 export const roleNames = { student: 'Student', teacher: 'Teacher', admin: 'Admin' } as const
 export const typeNames = { theory: 'Theory', quiz: 'Quiz', practice: 'Practice' } as const
@@ -134,6 +140,7 @@ export type Profile = {
   achievements: { id: string; title: string; description: string; at: string | null }[]
 }
 export type Gradebook = {
+  next_offset: number | null
   columns: SummaryLesson[]
   rows: {
     id: string

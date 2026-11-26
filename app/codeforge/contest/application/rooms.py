@@ -1,6 +1,7 @@
 import asyncio
+import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from codeforge.common.contracts import (
@@ -9,6 +10,7 @@ from codeforge.common.contracts import (
     Problem,
     SubmissionLimiter,
     User,
+    queue_age,
 )
 from codeforge.contest.application.ports import (
     CodeSubmission,
@@ -19,6 +21,8 @@ from codeforge.contest.application.ports import (
     TaskBank,
 )
 from codeforge.contest.domain import Rank, calculate_cell, phase, rank
+
+logger = logging.getLogger(__name__)
 
 
 def owner_draft(row: Document, user: User) -> None:
@@ -270,6 +274,7 @@ class Contests:
             if phase(row["start_at"], row["end_at"], at) != "running":
                 raise Problem(409, "contest_closed", "Приём решений закрыт")
             await self.limiter.check(user)
+            await tx.reserve_submission()
             attempt = await tx.create_attempt(
                 uuid4(),
                 id_,
@@ -379,6 +384,15 @@ class Contests:
                 assert problem is not None
                 await request_judging(tx, attempt, problem)
                 await tx.schedule_retry(attempt["id"])
+
+    async def report_queue(self) -> None:
+        async with self.repository.read() as reader:
+            depth, oldest = await reader.queue_status()
+        age = queue_age(oldest, datetime.now(UTC))
+        if depth >= 50 or age >= 30:
+            logger.warning(
+                "Contest judging queue: depth=%s oldest_seconds=%s", depth, age
+            )
 
     async def tick(self) -> None:
         events: list[tuple[UUID, str, Document]] = []

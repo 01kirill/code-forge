@@ -963,3 +963,10 @@ textarea.short {
   width: 100%;
   overflow: hidden;
 }
+
+.course-fields {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}

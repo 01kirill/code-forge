@@ -5,7 +5,7 @@ from functools import partial
 import httpx
 from fastapi import FastAPI
 
-from codeforge.common.broker import connect, publish_pending
+from codeforge.common.broker import connect, prune_outbox, publish_pending
 from codeforge.common.http import application
 from codeforge.common.redis_adapters import RedisLiveEvents, RedisSubmissionLimiter
 from codeforge.common.runtime import postgres, recurring, resources, settings
@@ -41,8 +41,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.contests = contests
         await broker.consume("contest.events", contests.sync_user)
         await broker.consume("judge.result.contest", contests.result)
-        async with recurring(
-            partial(publish_pending, pool, broker), contests.tick, contests.recover
+        async with (
+            recurring(
+                partial(publish_pending, pool, broker), contests.tick, contests.recover
+            ),
+            recurring(partial(prune_outbox, pool), contests.report_queue, interval=60),
         ):
             yield
 

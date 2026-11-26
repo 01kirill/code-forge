@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 from uuid import uuid4
 
@@ -7,6 +8,7 @@ from codeforge.common.contracts import (
     Problem,
     SubmissionLimiter,
     User,
+    queue_age,
 )
 from codeforge.education.application.content import Content
 from codeforge.education.application.ports import (
@@ -19,6 +21,8 @@ from codeforge.education.application.ports import (
 from codeforge.education.application.progress import Progress
 from codeforge.education.application.views import now
 from codeforge.education.domain import LESSON_XP, Verdict, changes, grant, task_xp
+
+logger = logging.getLogger(__name__)
 
 
 def public_submission(doc: Document) -> Document:
@@ -68,6 +72,7 @@ class Submissions:
             await self.limiter.check(user)
 
         async def save(tx: EducationData) -> Document:
+            await tx.reserve_submission()
             sequence = await tx.next_sequence(user.id)
             at = now()
             doc = {
@@ -139,6 +144,14 @@ class Submissions:
                 at + timedelta(seconds=45),
             )
 
+    async def report_queue(self) -> None:
+        depth, oldest = await self.store.queue_status()
+        age = queue_age(oldest, now())
+        if depth >= 50 or age >= 30:
+            logger.warning(
+                "Education judging queue: depth=%s oldest_seconds=%s", depth, age
+            )
+
     async def apply_result(self, key: str, event: Document) -> None:
         async def save(tx: EducationData) -> tuple[Document, Document | None] | None:
             attempt = await tx.finish_submission(event["id"], event["result"])
@@ -153,15 +166,20 @@ class Submissions:
                 "xp": profile["xp"],
                 "achievements": profile.get("achievements", {}).copy(),
             }
-            failures = 0
-            async for item in tx.task_history(attempt["user_id"], attempt["task_id"]):
+            progress = profile.setdefault("task_progress", {}).setdefault(
+                attempt["task_id"], {"sequence": 0, "failures": 0}
+            )
+            async for item in tx.task_history(
+                attempt["user_id"], attempt["task_id"], progress["sequence"]
+            ):
                 if item["state"] == "queued":
                     break
+                progress["sequence"] = item["sequence"]
                 verdict = item["result"]["verdict"]
                 if verdict == Verdict.TECHNICAL:
                     continue
                 if verdict != Verdict.AC:
-                    failures += 1
+                    progress["failures"] += 1
                     continue
                 was_solved = item["task_id"] in profile.get("solved", {})
                 at, zone = item["submitted_at"], item["timezone"]
@@ -169,10 +187,10 @@ class Submissions:
                     profile,
                     "task",
                     item["task_id"],
-                    task_xp(item["difficulty"], failures),
+                    task_xp(item["difficulty"], progress["failures"]),
                     at,
                     zone,
-                    first_try=failures == 0,
+                    first_try=progress["failures"] == 0,
                 )
                 if not was_solved:
                     profile["solved"][item["task_id"]]["lesson_id"] = item["lesson_id"]

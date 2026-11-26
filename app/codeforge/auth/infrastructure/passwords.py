@@ -1,8 +1,12 @@
+import asyncio
 import base64
 import hashlib
+from collections.abc import Callable
 
 import bcrypt
 from starlette.concurrency import run_in_threadpool
+
+from codeforge.common.contracts import Problem
 
 DUMMY_HASH = "sha256-v1:$2b$12$LQv3c1yqBWVHxkd0LHAkCOoTyEyn4b6i.T/Dchouj2WmiZbQmwZqG"
 
@@ -24,9 +28,24 @@ def check_password(password: str, stored: str) -> bool:
 
 
 class BcryptPasswords:
+    def __init__(self) -> None:
+        self.slots = asyncio.Semaphore(2)
+
+    async def work[T](self, fn: Callable[..., T], *args: str) -> T:
+        try:
+            await asyncio.wait_for(self.slots.acquire(), timeout=5)
+        except TimeoutError as exc:
+            raise Problem(
+                429, "auth_busy", "Слишком много запросов. Повторите позже"
+            ) from exc
+        try:
+            return await run_in_threadpool(fn, *args)
+        finally:
+            self.slots.release()
+
     async def hash(self, password: str) -> str:
-        return await run_in_threadpool(hash_password, password)
+        return await self.work(hash_password, password)
 
     async def matches(self, password: str, stored: str | None) -> bool:
         # The dummy hash keeps the same bcrypt cost when the account is absent.
-        return await run_in_threadpool(check_password, password, stored or DUMMY_HASH)
+        return await self.work(check_password, password, stored or DUMMY_HASH)

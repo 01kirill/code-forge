@@ -59,7 +59,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         await broker.consume("education.events", event)
         await broker.consume("judge.result.education", submissions.apply_result)
-        async with recurring(partial(submissions.dispatch, RabbitJudgements(broker))):
+        async with (
+            recurring(partial(submissions.dispatch, RabbitJudgements(broker))),
+            recurring(submissions.report_queue, interval=60),
+        ):
             yield
 
 

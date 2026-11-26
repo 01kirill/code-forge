@@ -1,0 +1,9 @@
+services:
+  education-worker:
+    environment:
+      JUDGE_URL: ${JUDGE_URL:?set the private Judge0 URL}
+      JUDGE_AUTH_TOKEN: ${JUDGE_AUTH_TOKEN:?set the shared Judge0 token}
+    networks: [data, judge-egress]
+
+networks:
+  judge-egress:

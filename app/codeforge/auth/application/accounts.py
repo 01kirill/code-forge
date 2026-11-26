@@ -41,8 +41,18 @@ class Accounts:
         self.tokens = tokens
 
     async def register(
-        self, email: str, name: str, password: str, role: Role = "student"
+        self,
+        email: str,
+        name: str,
+        password: str,
+        role: Role = "student",
+        *,
+        ip: str | None = None,
     ) -> Document:
+        if ip is not None and not await self.state.allow_registration(ip):
+            raise Problem(
+                429, "registration_limit", "Повторите регистрацию через минуту"
+            )
         hashed = await self.passwords.hash(password)
         try:
             async with self.repository.transaction() as tx:
@@ -75,13 +85,15 @@ class Accounts:
             ),
             agent[:256],
         )
+        await self.state.publish_identity("user.updated", account.identity())
+        await self.state.activate(str(sid))
         return self.tokens.issue(account.principal(sid)), refresh
 
     async def login(
         self, email: str, password: str, ip: str, agent: str
     ) -> tuple[str, str]:
         email = email.lower()
-        if await self.state.log_login(ip, email) > 5:
+        if not await self.state.allow_login(ip, email):
             raise Problem(429, "login_limit", "Повторите вход через минуту")
         account = await self.repository.by_email(email)
         valid = await self.passwords.matches(

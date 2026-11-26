@@ -124,3 +124,12 @@ async def publish_pending(
             await conn.execute(
                 "UPDATE outbox SET published_at=now() WHERE id=$1", row["id"]
             )
+
+
+async def prune_outbox(pool: asyncpg.Pool) -> None:
+    await pool.execute(
+        "WITH stale AS (SELECT id FROM outbox "
+        "WHERE published_at < now() - interval '7 days' LIMIT 1000 "
+        "FOR UPDATE SKIP LOCKED) DELETE FROM outbox USING stale "
+        "WHERE outbox.id=stale.id"
+    )

@@ -1,6 +1,12 @@
 from uuid import uuid4
 
-from codeforge.common.contracts import Document, Problem, User, check_owner
+from codeforge.common.contracts import (
+    JUDGE_LANGUAGES,
+    Document,
+    Problem,
+    User,
+    check_owner,
+)
 from codeforge.education.application.ports import (
     CourseCache,
     CourseDraft,
@@ -77,6 +83,8 @@ class Content:
             profile = await self.store.profile(user)
             result["enrolled"] = slug in profile.get("courses", [])
             result["completed"] = list(profile.get("completed", {}))
+        if author:
+            result["revision"] = revision
         return result
 
     async def list_courses(
@@ -122,6 +130,7 @@ class Content:
         user: User,
         *,
         create: bool = False,
+        revision: str | None = None,
     ) -> Document:
         require_teacher(user)
 
@@ -129,6 +138,7 @@ class Content:
             old = None if create else await self.course(slug, tx)
             if old:
                 check_owner(user, old["author_id"])
+                self.check_revision(old, revision)
             ids = [id_ for module in data["modules"] for id_ in module["lessons"]]
             if ids:
                 lessons = await tx.lessons(ids, course=slug)
@@ -158,6 +168,11 @@ class Content:
         if revision:
             await self.cache.drop(slug, revision)
         return await self.structure(slug, user, author=True)
+
+    @staticmethod
+    def check_revision(course: Document, revision: str | None) -> None:
+        if revision != course["revision"]:
+            raise Problem(409, "course_conflict", "Курс изменился. Обновите страницу")
 
     async def delete_course(self, slug: str, user: User) -> None:
         async def archive(tx: EducationData) -> str:
@@ -192,10 +207,17 @@ class Content:
             require_teacher(user)
             if user.role != "admin":
                 owner = user.id
-        return [
-            expose(task, "templates") | {"languages": list(task["templates"])}
-            for task in await self.store.task_choices(contest=contest, author=owner)
-        ]
+        choices = []
+        for task in await self.store.task_choices(contest=contest, author=owner):
+            languages = list(task["templates"])
+            if contest:
+                languages = [
+                    language for language in languages if language in JUDGE_LANGUAGES
+                ]
+                if not languages:
+                    continue
+            choices.append(expose(task, "templates") | {"languages": languages})
+        return choices
 
     async def author_task(self, id_: str, user: User) -> Document:
         task = await self.task(id_)
@@ -206,7 +228,14 @@ class Content:
         task = await self.task(id_)
         if not task["contest_ready"]:
             raise Problem(404, "task_missing", "Задача недоступна для соревнований")
-        return public_task(task)
+        templates = {
+            key: source
+            for key, source in task["templates"].items()
+            if key in JUDGE_LANGUAGES
+        }
+        if not templates:
+            raise Problem(404, "task_missing", "У задачи нет поддерживаемых языков")
+        return public_task(task) | {"templates": templates}
 
     async def write_task(
         self, task_id: str | None, user: User, spec: Document
@@ -299,12 +328,18 @@ class Content:
         lesson: Document | None,
         user: User,
         lesson_id: str | None = None,
+        *,
+        revision: str | None = None,
     ) -> Document:
         id_ = lesson_id or uuid4().hex
+
+        next_revision = uuid4().hex
 
         async def save(tx: EducationData) -> str:
             course = await self.course(slug, tx)
             check_owner(user, course["author_id"])
+            if revision is not None:
+                self.check_revision(course, revision)
             modules = course["modules"]
             if lesson is None:
                 if course["published"] and sum(len(m["lessons"]) for m in modules) <= 1:
@@ -326,6 +361,8 @@ class Content:
                 if lesson_id is None:
                     if module is None or module >= len(modules):
                         raise Problem(422, "module", "Выберите модуль курса")
+                    if len(modules[module]["lessons"]) >= 100:
+                        raise Problem(422, "module_full", "В модуле уже 100 уроков")
                     await tx.add_lesson(fields | {"module": module})
                     modules[module]["lessons"].append(id_)
                 else:
@@ -336,12 +373,12 @@ class Content:
                 slug,
                 {
                     "modules": modules,
-                    "revision": uuid4().hex,
+                    "revision": next_revision,
                     "updated_at": now(),
                 },
             )
             return str(course["revision"])
 
-        revision = await self.store.transaction(save)
-        await self.cache.drop(slug, revision)
-        return {"id": id_}
+        previous_revision = await self.store.transaction(save)
+        await self.cache.drop(slug, previous_revision)
+        return {"id": id_, "revision": next_revision}

@@ -1,4 +1,5 @@
 import json
+import secrets
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -76,23 +77,31 @@ class Tokens:
         return await self.current(user)
 
     async def current(self, user: User) -> User:
-        values = await self.redis.mget(f"identity:{user.id}", f"revoked:{user.sid}")
-        if user.exp <= datetime.now(UTC).timestamp() or values[1]:
+        values = await self.redis.mget(f"identity:{user.id}", f"session:{user.sid}")
+        if user.exp <= datetime.now(UTC).timestamp() or not all(values):
             raise Problem(401, "session", "Войдите в аккаунт")
-        if values[0]:
-            state = json.loads(values[0])
-            if not state["active"]:
-                raise Problem(403, "blocked", "Аккаунт заблокирован")
-            if state.get("sessions_after", 0) > user.version:
-                raise Problem(401, "session", "Войдите в аккаунт")
-            if state["version"] >= user.version:
-                return replace(
-                    user,
-                    name=state["name"],
-                    role=state["role"],
-                    timezone=state["timezone"],
-                )
-        return user
+        state = json.loads(values[0])
+        if not state["active"]:
+            raise Problem(403, "blocked", "Аккаунт заблокирован")
+        if (
+            state.get("sessions_after", 0) > user.version
+            or state["version"] < user.version
+        ):
+            raise Problem(401, "session", "Войдите в аккаунт")
+        return replace(
+            user, name=state["name"], role=state["role"], timezone=state["timezone"]
+        )
+
+    async def socket_ticket(self, user: User) -> str:
+        ticket = secrets.token_urlsafe(32)
+        await self.redis.set(f"socket:{ticket}", json.dumps(asdict(user)), ex=20)
+        return ticket
+
+    async def use_socket_ticket(self, ticket: str) -> User:
+        raw = await self.redis.getdel(f"socket:{ticket}") if len(ticket) == 43 else None
+        if not raw:
+            raise Problem(401, "session", "Войдите в аккаунт")
+        return await self.current(User(**json.loads(raw)))
 
 
 async def optional_user(

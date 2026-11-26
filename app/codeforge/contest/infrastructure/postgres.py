@@ -7,7 +7,7 @@ import asyncpg
 from asyncpg.pool import PoolConnectionProxy
 
 from codeforge.common.broker import enqueue
-from codeforge.common.contracts import Document, User
+from codeforge.common.contracts import Document, User, check_queue
 from codeforge.contest.application.ports import CodeSubmission, ContestData, RoomDraft
 from codeforge.contest.domain import Cell, State
 
@@ -312,6 +312,19 @@ class PostgresContestData:
             contest,
         )
         return count
+
+    async def reserve_submission(self) -> None:
+        await self.conn.execute("SELECT pg_advisory_xact_lock(407721)")
+        count, _ = await self.queue_status()
+        check_queue(count)
+
+    async def queue_status(self) -> tuple[int, datetime | None]:
+        row = await self.conn.fetchrow(
+            "SELECT count(*) AS depth, min(submitted_at) AS oldest "
+            "FROM contest_submissions WHERE result IS NULL"
+        )
+        assert row is not None
+        return row["depth"], row["oldest"]
 
     async def due_attempts(self) -> list[Document]:
         rows = await self.conn.fetch(

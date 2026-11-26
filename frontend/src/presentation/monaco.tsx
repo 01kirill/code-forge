@@ -2,14 +2,36 @@ import { useEffect, useRef, useState } from 'react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
 import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController'
-import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/basic-languages/clojure/clojure.contribution'
 import 'monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'
+import 'monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution'
+import 'monaco-editor/esm/vs/basic-languages/elixir/elixir.contribution'
+import 'monaco-editor/esm/vs/basic-languages/fsharp/fsharp.contribution'
+import 'monaco-editor/esm/vs/basic-languages/go/go.contribution'
+import 'monaco-editor/esm/vs/basic-languages/java/java.contribution'
+import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/kotlin/kotlin.contribution'
+import 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution'
+import 'monaco-editor/esm/vs/basic-languages/objective-c/objective-c.contribution'
+import 'monaco-editor/esm/vs/basic-languages/pascal/pascal.contribution'
+import 'monaco-editor/esm/vs/basic-languages/perl/perl.contribution'
+import 'monaco-editor/esm/vs/basic-languages/php/php.contribution'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/basic-languages/r/r.contribution'
+import 'monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution'
+import 'monaco-editor/esm/vs/basic-languages/rust/rust.contribution'
+import 'monaco-editor/esm/vs/basic-languages/scala/scala.contribution'
+import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
+import 'monaco-editor/esm/vs/basic-languages/sql/sql.contribution'
+import 'monaco-editor/esm/vs/basic-languages/swift/swift.contribution'
+import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/vb/vb.contribution'
 
-import type { Language } from '../domain/models'
+import { languageSyntax, type Language } from '../domain/models'
 
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
 
-const snippets: Record<Language, Record<string, string>> = {
+const snippets = {
   python: { print: 'print(${1:value})', input: 'input()', int: 'int(${1:value})' },
   cpp: { cout: "std::cout << ${1:value} << '\\n';", cin: 'std::cin >> ${1:value};' },
 }
@@ -95,7 +117,8 @@ export default function CodeEditor({
   useEffect(() => {
     const model = editor.current?.getModel()
     if (model && model.getValue() !== value) model.setValue(value)
-    if (model && model.getLanguageId() !== language) monaco.editor.setModelLanguage(model, language)
+    const syntax = languageSyntax(language)
+    if (model && model.getLanguageId() !== syntax) monaco.editor.setModelLanguage(model, syntax)
   }, [value, language, label])
 
   if (usePlain)

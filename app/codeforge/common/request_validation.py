@@ -1,8 +1,21 @@
-from typing import Annotated, Literal
+from typing import Annotated
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, Field, WithJsonSchema
 
-Language = Literal["python", "cpp"]
+from codeforge.common.contracts import JUDGE_LANGUAGES
+
+
+def check_language(language: str) -> str:
+    if language not in JUDGE_LANGUAGES:
+        raise ValueError("Unsupported Judge0 language")
+    return language
+
+
+Language = Annotated[
+    str,
+    AfterValidator(check_language),
+    WithJsonSchema({"type": "string", "enum": list(JUDGE_LANGUAGES)}),
+]
 
 
 def check_source_bytes(code: str) -> str:

@@ -1,20 +1,139 @@
 import csv
 import io
+import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from codeforge.auth.infrastructure.passwords import check_password, hash_password
 from codeforge.auth.presentation.schemas import Registration
+from codeforge.common.contracts import JUDGE_LANGUAGES, Document, Problem, User
+from codeforge.common.security import Tokens
 from codeforge.contest.domain import Cell, Rank, calculate_cell, phase, rank
-from codeforge.contest.presentation.schemas import RoomEdit
+from codeforge.contest.presentation.schemas import ContestCode, RoomEdit
+from codeforge.education.application.content import Content
 from codeforge.education.domain import Verdict, grant, level, percent, streaks, task_xp
 from codeforge.education.domain.verdicts import Case, Execution, aggregate
-from codeforge.education.infrastructure.judge0 import encode, verdict
+from codeforge.education.infrastructure.judge0 import Judge, encode, verdict
 from codeforge.education.presentation.csv_export import csv_gradebook
 from codeforge.education.presentation.schemas import Code
 from pydantic import ValidationError
+from redis.asyncio import Redis
 
 START = datetime(2026, 11, 20, 0, 0, tzinfo=UTC)
+
+
+async def test_access_requires_both_identity_and_live_session() -> None:
+    redis = MagicMock(spec=Redis)
+    tokens = object.__new__(Tokens)
+    tokens.redis = redis
+    user = User(
+        "user",
+        "name",
+        "student",
+        "UTC",
+        1,
+        "session",
+        int(datetime.now(UTC).timestamp()) + 60,
+    )
+    identity = json.dumps(
+        {
+            "active": True,
+            "version": 1,
+            "name": "name",
+            "role": "student",
+            "timezone": "UTC",
+        }
+    )
+    redis.mget = AsyncMock(side_effect=[[identity, "1"], [identity, None], [None, "1"]])
+    assert await tokens.current(user) == user
+    for _ in range(2):
+        with pytest.raises(Problem) as error:
+            await tokens.current(user)
+        assert error.value.status == 401
+
+
+async def test_judge_catalog_accepts_each_source_language() -> None:
+    expected = {
+        "python": 71,
+        "cpp": 54,
+        "c": 50,
+        "csharp": 51,
+        "go": 60,
+        "java": 62,
+        "javascript": 63,
+        "pascal": 67,
+        "php": 68,
+        "rust": 73,
+        "typescript": 74,
+        "sql": 82,
+    }
+    assert {key: spec["id"] for key, spec in JUDGE_LANGUAGES.items()} == expected
+    submitted: list[int] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": spec["id"], "name": spec["name"]}
+                    for spec in JUDGE_LANGUAGES.values()
+                ],
+            )
+        [entry] = json.loads(request.content)["submissions"]
+        submitted.append(entry["language_id"])
+        assert entry["enable_network"] is False
+        return httpx.Response(201, json=[{"token": "fixture-token"}])
+
+    async with httpx.AsyncClient(
+        base_url="http://judge", transport=httpx.MockTransport(reply)
+    ) as client:
+        judge = Judge(client)
+        for key in JUDGE_LANGUAGES:
+            assert Code(language=key, code="example").language == key
+            assert ContestCode(language=key, code="example").language == key
+            await judge.start(
+                {"time_ms": 1000, "memory_kb": 65536},
+                key,
+                "example",
+                [Case("", "", True)],
+            )
+    assert submitted == [expected[key] for key in JUDGE_LANGUAGES]
+
+
+@pytest.mark.parametrize("schema", [Code, ContestCode])
+@pytest.mark.parametrize("language", ["ruby", "python2", "cpp-clang"])
+def test_removed_language_is_rejected(
+    schema: type[Code] | type[ContestCode], language: str
+) -> None:
+    with pytest.raises(ValidationError, match="language"):
+        schema(language=language, code="example")
+
+
+async def test_contest_bank_excludes_retired_templates() -> None:
+    active: Document = {
+        "id": "mixed",
+        "contest_ready": True,
+        "templates": {"php": "<?php echo 3;", "ruby": "puts 3"},
+        "tests": [],
+    }
+    retired = active | {"id": "retired", "templates": {"ruby": "puts 3"}}
+    store = AsyncMock()
+    store.task_choices.return_value = [active, retired]
+    store.task.side_effect = [active, retired]
+    content = Content(store, AsyncMock())
+    user = User("author", "author", "teacher", "UTC", 1, "session")
+
+    choices = await content.list_tasks(user, contest=True)
+    assert [entry["languages"] for entry in choices] == [["php"]]
+    assert (await content.contest_task("mixed"))["templates"] == {
+        "php": "<?php echo 3;"
+    }
+    with pytest.raises(Problem) as missing:
+        await content.contest_task("retired")
+    assert missing.value.status == 404
+    assert "ruby" in active["templates"]
 
 
 @pytest.mark.parametrize(

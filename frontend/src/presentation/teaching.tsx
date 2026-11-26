@@ -8,6 +8,8 @@ import { useLoad, useSession } from '../application/state'
 import {
   difficultyNames,
   languageNames,
+  languages,
+  type Language,
   moveItem,
   typeNames,
   type AuthorQuestion,
@@ -72,7 +74,7 @@ export function Teaching() {
                     <strong>{task.title}</strong>
                     <span>
                       {t(difficultyNames[task.difficulty])} ·{' '}
-                      {task.languages.map((language) => languageNames[language]).join(', ')}
+                      {task.languages.map((language) => languageNames[language] ?? language).join(', ')}
                     </span>
                     <Link to={`/teach/tasks/${task.task_id}`}>{t('Edit')}</Link>
                   </li>
@@ -194,10 +196,11 @@ function BackToTeaching() {
 }
 
 type ModuleDraft = { title: string; lessons: (LessonDraft & { id: string })[] }
-type AuthorCourse = CourseFields & { slug: string; modules: ModuleDraft[] }
+type AuthorCourse = CourseFields & { slug: string; revision: string; modules: ModuleDraft[] }
 type TaskChoice = Pick<TaskMetadata, 'task_id' | 'title'>
 const blankCourse: AuthorCourse = {
   slug: '',
+  revision: '',
   title: '',
   description: '',
   language: 'python',
@@ -256,7 +259,9 @@ function EditCourse({
   const [source, setSource] = useState(original)
   if (source !== original) {
     setSource(original)
-    setDraft((previous) => ({ ...previous, modules: original.modules }))
+    setDraft((previous) =>
+      previous.revision === original.revision ? { ...previous, modules: original.modules } : previous,
+    )
   }
   function patch(fields: Partial<AuthorCourse>) {
     setDraft({ ...draft, ...fields })
@@ -265,6 +270,8 @@ function EditCourse({
   function canAddLesson(index: number) {
     return (
       !action.busy &&
+      !lesson &&
+      draft.revision === original.revision &&
       !topicsChanged &&
       original.topics.length > 0 &&
       original.modules[index]?.title === draft.modules[index].title
@@ -290,9 +297,11 @@ function EditCourse({
       const course = await api<AuthorCourse>(exists ? `/edu/courses/${original.slug}` : '/edu/courses', {
         method: exists ? 'PATCH' : 'POST',
         body: payload,
+        headers: exists ? { 'If-Match': `"${draft.revision}"` } : undefined,
       })
       if (!exists) navigate(`/teach/courses/${course.slug}`, { replace: true })
       else {
+        setDraft(course)
         onSave?.(course)
         setSaved(true)
       }
@@ -310,233 +319,235 @@ function EditCourse({
         )}
       </PageHeading>
       <form className="stack panel" onSubmit={(e) => void save(e)}>
-        <div className="form-grid">
-          {!exists && (
+        <fieldset className="stack course-fields" disabled={action.busy || Boolean(lesson)}>
+          <div className="form-grid">
+            {!exists && (
+              <label>
+                {t('Course URL slug')}
+                <input
+                  required
+                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                  maxLength={80}
+                  value={draft.slug}
+                  onChange={(e) => patch({ slug: e.target.value })}
+                />
+              </label>
+            )}
             <label>
-              {t('Course URL slug')}
+              {t('Title')}
               <input
                 required
-                pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                maxLength={80}
-                value={draft.slug}
-                onChange={(e) => patch({ slug: e.target.value })}
-              />
-            </label>
-          )}
-          <label>
-            {t('Title')}
-            <input
-              required
-              maxLength={120}
-              value={draft.title}
-              onChange={(e) => patch({ title: e.target.value })}
-            />
-          </label>
-          <LanguageSelect value={draft.language} onChange={(language) => patch({ language })} />
-          <label>
-            {t('Description')}
-            <textarea
-              required
-              value={draft.description}
-              onChange={(e) => patch({ description: e.target.value })}
-            />
-          </label>
-        </div>
-        <fieldset className="stack picker">
-          <legend>{t('Lesson topics')}</legend>
-          <div className="row">
-            <label>
-              {t('Topic name')}
-              <input
-                value={topicName}
                 maxLength={120}
-                onChange={(e) => setTopicName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    addTopic()
-                  }
-                }}
+                value={draft.title}
+                onChange={(e) => patch({ title: e.target.value })}
               />
             </label>
-            <button type="button" disabled={!canAddTopic} onClick={addTopic}>
-              {t('Add topic')}
-            </button>
-          </div>
-          {draft.topics.length > 0 && (
-            <ul className="ordered-items">
-              {draft.topics.map((topic) => (
-                <li key={topic}>
-                  <strong>{topic}</strong>
-                  {usedTopics.has(topic) ? (
-                    <span>{t('Used in lessons')}</span>
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label={t('Remove topic {{name}}', { name: topic })}
-                      onClick={() => patch({ topics: draft.topics.filter((item) => item !== topic) })}
-                    >
-                      {t('Remove')}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {topicsChanged ? (
-            <p role="status">{t('Save the course to apply topic changes.')}</p>
-          ) : !original.topics.length ? (
-            <p>{t('Add a topic and save the course before adding lessons.')}</p>
-          ) : null}
-        </fieldset>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.published}
-            disabled={!exists}
-            onChange={(e) => patch({ published: e.target.checked })}
-          />
-          {t('Published')}
-        </label>
-        <h2>{t('Modules')}</h2>
-        {draft.modules.map((module, index) => (
-          <fieldset key={index} className="stack picker">
-            <legend>
-              {t('Module title')} {index + 1}
-            </legend>
-            <div className="row">
-              <input
-                aria-label={`${t('Module title')} ${index + 1}`}
+            <LanguageSelect value={draft.language} onChange={(language) => patch({ language })} />
+            <label>
+              {t('Description')}
+              <textarea
                 required
-                value={module.title}
-                onChange={(e) => patchModule(index, { ...module, title: e.target.value })}
+                value={draft.description}
+                onChange={(e) => patch({ description: e.target.value })}
               />
-              <OrderControls
-                index={index}
-                length={draft.modules.length}
-                moveBy={(by) => patch({ modules: moveItem(draft.modules, index, by) })}
-              />
-              <button
-                type="button"
-                disabled={module.lessons.length > 0}
-                onClick={() => patch({ modules: draft.modules.filter((_, n) => index !== n) })}
-              >
-                {t('Remove')}
+            </label>
+          </div>
+          <fieldset className="stack picker">
+            <legend>{t('Lesson topics')}</legend>
+            <div className="row">
+              <label>
+                {t('Topic name')}
+                <input
+                  value={topicName}
+                  maxLength={120}
+                  onChange={(e) => setTopicName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addTopic()
+                    }
+                  }}
+                />
+              </label>
+              <button type="button" disabled={!canAddTopic} onClick={addTopic}>
+                {t('Add topic')}
               </button>
             </div>
-            <ol className="ordered-items">
-              {module.lessons.map((item, position) => (
-                <li key={item.id}>
-                  <strong>{item.title}</strong>
-                  <span>{t(typeNames[item.type])}</span>
-                  <span>{item.topic}</span>
-                  <select
-                    value={index}
-                    aria-label={`${t('Move to module')}: ${item.title}`}
-                    onChange={(e) => {
-                      const next = Number(e.target.value)
-                      patch({
-                        modules: draft.modules.map((value, i) =>
-                          i === index
-                            ? {
-                                ...value,
-                                lessons: value.lessons.filter((entry) => entry.id !== item.id),
-                              }
-                            : i === next
-                              ? { ...value, lessons: [...value.lessons, item] }
-                              : value,
-                        ),
-                      })
-                    }}
-                  >
-                    {draft.modules.map((entry, i) => (
-                      <option key={i} value={i}>
-                        {entry.title}
-                      </option>
-                    ))}
-                  </select>
-                  <OrderControls
-                    index={position}
-                    length={module.lessons.length}
-                    moveBy={(by) =>
-                      patchModule(index, {
-                        ...module,
-                        lessons: moveItem(module.lessons, position, by),
-                      })
-                    }
-                  />
-                  <button
-                    type="button"
-                    disabled={action.busy}
-                    onClick={() => setLesson({ doc: item, module: index })}
-                  >
-                    {t('Edit')}
-                  </button>
-                </li>
-              ))}
-            </ol>
-            {exists && (
+            {draft.topics.length > 0 && (
+              <ul className="ordered-items">
+                {draft.topics.map((topic) => (
+                  <li key={topic}>
+                    <strong>{topic}</strong>
+                    {usedTopics.has(topic) ? (
+                      <span>{t('Used in lessons')}</span>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={t('Remove topic {{name}}', { name: topic })}
+                        onClick={() => patch({ topics: draft.topics.filter((item) => item !== topic) })}
+                      >
+                        {t('Remove')}
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {topicsChanged ? (
+              <p role="status">{t('Save the course to apply topic changes.')}</p>
+            ) : !original.topics.length ? (
+              <p>{t('Add a topic and save the course before adding lessons.')}</p>
+            ) : null}
+          </fieldset>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={draft.published}
+              disabled={!exists}
+              onChange={(e) => patch({ published: e.target.checked })}
+            />
+            {t('Published')}
+          </label>
+          <h2>{t('Modules')}</h2>
+          {draft.modules.map((module, index) => (
+            <fieldset key={index} className="stack picker">
+              <legend>
+                {t('Module title')} {index + 1}
+              </legend>
               <div className="row">
+                <input
+                  aria-label={`${t('Module title')} ${index + 1}`}
+                  required
+                  value={module.title}
+                  onChange={(e) => patchModule(index, { ...module, title: e.target.value })}
+                />
+                <OrderControls
+                  index={index}
+                  length={draft.modules.length}
+                  moveBy={(by) => patch({ modules: moveItem(draft.modules, index, by) })}
+                />
                 <button
                   type="button"
-                  className="button"
-                  disabled={!canAddLesson(index)}
-                  onClick={() => setLesson({ module: index })}
+                  disabled={module.lessons.length > 0}
+                  onClick={() => patch({ modules: draft.modules.filter((_, n) => index !== n) })}
                 >
-                  <Plus size={16} aria-hidden />
-                  {t('Add lesson')}
-                </button>
-                <button
-                  type="button"
-                  className="button"
-                  disabled={!canAddLesson(index)}
-                  onClick={() => setLesson({ module: index, practice: true })}
-                >
-                  <Plus size={16} aria-hidden />
-                  {t('Add practice lesson')}
+                  {t('Remove')}
                 </button>
               </div>
-            )}
-          </fieldset>
-        ))}
-        <button
-          type="button"
-          className="button"
-          onClick={() => patch({ modules: [...draft.modules, { title: '', lessons: [] }] })}
-        >
-          <Plus size={16} aria-hidden />
-          {t('Add module')}
-        </button>
-        <ErrorMessage error={action.error} />
-        <div className="row">
-          <button className="button primary" disabled={action.busy || Boolean(lesson)}>
-            {t('Save')}
+              <ol className="ordered-items">
+                {module.lessons.map((item, position) => (
+                  <li key={item.id}>
+                    <strong>{item.title}</strong>
+                    <span>{t(typeNames[item.type])}</span>
+                    <span>{item.topic}</span>
+                    <select
+                      value={index}
+                      aria-label={`${t('Move to module')}: ${item.title}`}
+                      onChange={(e) => {
+                        const next = Number(e.target.value)
+                        patch({
+                          modules: draft.modules.map((value, i) =>
+                            i === index
+                              ? {
+                                  ...value,
+                                  lessons: value.lessons.filter((entry) => entry.id !== item.id),
+                                }
+                              : i === next
+                                ? { ...value, lessons: [...value.lessons, item] }
+                                : value,
+                          ),
+                        })
+                      }}
+                    >
+                      {draft.modules.map((entry, i) => (
+                        <option key={i} value={i}>
+                          {entry.title}
+                        </option>
+                      ))}
+                    </select>
+                    <OrderControls
+                      index={position}
+                      length={module.lessons.length}
+                      moveBy={(by) =>
+                        patchModule(index, {
+                          ...module,
+                          lessons: moveItem(module.lessons, position, by),
+                        })
+                      }
+                    />
+                    <button
+                      type="button"
+                      disabled={action.busy}
+                      onClick={() => setLesson({ doc: item, module: index })}
+                    >
+                      {t('Edit')}
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              {exists && (
+                <div className="row">
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={!canAddLesson(index)}
+                    onClick={() => setLesson({ module: index })}
+                  >
+                    <Plus size={16} aria-hidden />
+                    {t('Add lesson')}
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    disabled={!canAddLesson(index)}
+                    onClick={() => setLesson({ module: index, practice: true })}
+                  >
+                    <Plus size={16} aria-hidden />
+                    {t('Add practice lesson')}
+                  </button>
+                </div>
+              )}
+            </fieldset>
+          ))}
+          <button
+            type="button"
+            className="button"
+            onClick={() => patch({ modules: [...draft.modules, { title: '', lessons: [] }] })}
+          >
+            <Plus size={16} aria-hidden />
+            {t('Add module')}
           </button>
-          {exists && (
-            <button
-              type="button"
-              className="danger"
-              disabled={action.busy}
-              onClick={() => {
-                if (
-                  confirm(
-                    t('Archive {{name}}? Existing submissions will remain in history.', {
-                      name: original.title,
-                    }),
-                  )
-                ) {
-                  void action.run(async () => {
-                    await api(`/edu/courses/${original.slug}`, { method: 'DELETE' })
-                    navigate('/teach')
-                  })
-                }
-              }}
-            >
-              {t('Delete')}
+          <ErrorMessage error={action.error} />
+          <div className="row">
+            <button className="button primary" disabled={draft.revision !== original.revision}>
+              {t('Save')}
             </button>
-          )}
-          {saved && <span role="status">{t('Saved')}</span>}
-        </div>
+            {exists && (
+              <button
+                type="button"
+                className="danger"
+                disabled={action.busy}
+                onClick={() => {
+                  if (
+                    confirm(
+                      t('Archive {{name}}? Existing submissions will remain in history.', {
+                        name: original.title,
+                      }),
+                    )
+                  ) {
+                    void action.run(async () => {
+                      await api(`/edu/courses/${original.slug}`, { method: 'DELETE' })
+                      navigate('/teach')
+                    })
+                  }
+                }}
+              >
+                {t('Delete')}
+              </button>
+            )}
+            {saved && <span role="status">{t('Saved')}</span>}
+          </div>
+        </fieldset>
       </form>
       {lesson && (
         <LessonForm
@@ -545,9 +556,12 @@ function EditCourse({
           module={lesson.module}
           original={lesson.doc}
           practice={lesson.practice}
-          close={(changed) => {
+          close={(revision) => {
             setLesson(undefined)
-            if (changed) reload?.()
+            if (revision) {
+              setDraft((previous) => ({ ...previous, revision }))
+              reload?.()
+            }
           }}
         />
       )}
@@ -607,16 +621,18 @@ function LessonForm({
   module: number
   original?: LessonDraft & { id: string }
   practice?: boolean
-  close: (changed: boolean) => void
+  close: (revision?: string) => void
 }) {
   const { t } = useTranslation()
   const action = useAction()
-  const [lesson, setLesson] = useState<LessonDraft>(
+  const [initial] = useState<LessonDraft>(
     original ??
       (practice
         ? { title: '', topic: '', type: 'practice', task_id: '' }
         : { title: '', topic: '', type: 'theory', body: '' }),
   )
+  const [lesson, setLesson] = useState(initial)
+  const headers = { 'If-Match': `"${course.revision}"` }
   const bank = useLoad<TaskChoice[]>('bank', () => api('/edu/tasks'), lesson.type === 'practice')
   const path = original ? `/edu/lessons/${original.id}` : '/edu/lessons'
   const [preview, setPreview] = useState(false)
@@ -644,11 +660,12 @@ function LessonForm({
       className="panel stack page-section"
       onSubmit={(e) =>
         void action.run(async () => {
-          await api(path, {
+          const change = await api<{ revision: string }>(path, {
+            headers,
             method: original ? 'PATCH' : 'POST',
             body: original ? lesson : { course_slug: course.slug, module, lesson },
           })
-          close(true)
+          close(change.revision)
         }, e)
       }
     >
@@ -763,7 +780,13 @@ function LessonForm({
         >
           {t('Save')}
         </button>
-        <button type="button" onClick={() => close(false)}>
+        <button
+          type="button"
+          disabled={action.busy}
+          onClick={() => {
+            if (lesson === initial || confirm(t('Discard unsaved changes?'))) close()
+          }}
+        >
           {t('Cancel')}
         </button>
         {original && (
@@ -780,8 +803,8 @@ function LessonForm({
                 )
               ) {
                 void action.run(async () => {
-                  await api(path, { method: 'DELETE' })
-                  close(true)
+                  const response = await request(path, { method: 'DELETE', headers })
+                  close(response.headers.get('ETag')?.replace(/"/g, ''))
                 })
               }
             }}
@@ -914,11 +937,20 @@ function QuestionEditor({
   )
 }
 
+const starterCode: Partial<Record<Language, string>> = {
+  python: '# Python\n',
+  cpp: '#include <iostream>\n\nint main() {\n    return 0;\n}\n',
+  javascript: "const fs = require('fs');\nconst input = fs.readFileSync(0, 'utf8');\n",
+  java: 'public class Main {\n    public static void main(String[] args) {\n    }\n}\n',
+  go: 'package main\n\nfunc main() {\n}\n',
+  rust: 'fn main() {\n}\n',
+}
+
 const blankTask: TaskDraft = {
   title: '',
   statement: '',
   difficulty: 'easy',
-  templates: { python: '# Python\n' },
+  templates: { python: starterCode.python },
   time_ms: 1000,
   memory_kb: 65536,
   contest_ready: false,
@@ -951,6 +983,8 @@ function EditTask({
   const navigate = useNavigate()
   const [draft, setDraft] = useState(original)
   const path = id ? `/edu/tasks/${id}` : '/edu/tasks'
+  const templateLanguages = Object.keys(draft.templates) as Language[]
+  const hasRetiredTemplates = templateLanguages.some((language) => !languages.includes(language))
   function patch(fields: Partial<TaskDraft>) {
     setDraft({ ...draft, ...fields })
   }
@@ -1039,38 +1073,48 @@ function EditTask({
           />
           {t('Eligible for contests')}
         </label>
+        <label>
+          {t('Add programming language')}
+          <select
+            value=""
+            disabled={languages.every((language) => language in draft.templates)}
+            onChange={(e) => {
+              const language = e.target.value as Language
+              patch({ templates: { ...draft.templates, [language]: starterCode[language] ?? '' } })
+            }}
+          >
+            <option value="" disabled>{t('Add programming language')}</option>
+            {languages.filter((language) => !(language in draft.templates)).map((language) => (
+              <option key={language} value={language}>{languageNames[language]}</option>
+            ))}
+          </select>
+        </label>
         <div className="form-grid">
-          {(['python', 'cpp'] as const).map((language) => (
+          {templateLanguages.map((language) => (
             <fieldset key={language} className="stack compact picker">
-              <legend>{languageNames[language]}</legend>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  checked={language in draft.templates}
-                  onChange={(e) => {
-                    const templates = { ...draft.templates }
-                    if (e.target.checked)
-                      templates[language] =
-                        language === 'cpp' ? '#include <iostream>\n' : '# Python\n'
-                    else delete templates[language]
-                    patch({ templates })
-                  }}
+              <legend>{languageNames[language] ?? language}</legend>
+              <label>
+                {t('Template')}
+                <textarea
+                  className="code-input short"
+                  required
+                  value={draft.templates[language]}
+                  onChange={(e) =>
+                    patch({ templates: { ...draft.templates, [language]: e.target.value } })
+                  }
                 />
-                {languageNames[language]}
               </label>
-              {language in draft.templates && (
-                <label>
-                  {t('Template')}
-                  <textarea
-                    className="code-input short"
-                    required
-                    value={draft.templates[language]}
-                    onChange={(e) =>
-                      patch({ templates: { ...draft.templates, [language]: e.target.value } })
-                    }
-                  />
-                </label>
-              )}
+              <button
+                type="button"
+                disabled={templateLanguages.length === 1 && languages.includes(language)}
+                onClick={() => {
+                  const templates = { ...draft.templates }
+                  delete templates[language]
+                  patch({ templates })
+                }}
+              >
+                {t('Remove')}
+              </button>
             </fieldset>
           ))}
         </div>
@@ -1151,11 +1195,13 @@ function EditTask({
         </button>
         <ErrorMessage error={action.error} />
         <div className="row">
-          <button className="button primary" disabled={action.busy}>
+          <button className="button primary" disabled={action.busy || hasRetiredTemplates || !templateLanguages.length}>
             {t(onCreate ? 'Save task to bank' : 'Save')}
           </button>
           {onCancel && (
-            <button type="button" disabled={action.busy} onClick={onCancel}>
+            <button type="button" disabled={action.busy} onClick={() => {
+              if (draft === original || confirm(t('Discard unsaved changes?'))) onCancel()
+            }}>
               {t('Cancel')}
             </button>
           )}
@@ -1183,6 +1229,7 @@ function EditTask({
             </button>
           )}
         </div>
+        {hasRetiredTemplates && <p>{t('Remove unsupported language templates before saving.')}</p>}
       </form>
     </>
   )
@@ -1193,7 +1240,9 @@ export function GradebookPage() {
   const { t } = useTranslation()
   const action = useAction()
   const endpoint = `/edu/courses/${slug}/gradebook`
-  const state = useLoad<Gradebook>(slug, () => api(endpoint))
+  const [page, setPage] = useState({ slug, offset: 0 })
+  const offset = page.slug === slug ? page.offset : 0
+  const state = useLoad<Gradebook>(`${slug}:${offset}`, () => api(`${endpoint}?offset=${offset}`))
   return (
     <>
       <Link className="back-link" to={`/teach/courses/${slug}`}>
@@ -1261,6 +1310,22 @@ export function GradebookPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+            {(offset > 0 || data.next_offset !== null) && (
+              <div className="row">
+                <button type="button" disabled={offset === 0}
+                  onClick={() => setPage({ slug, offset: Math.max(0, offset - 50) })}
+                >
+                  {t('Previous page')}
+                </button>
+                <button type="button" disabled={data.next_offset === null}
+                  onClick={() => {
+                    if (data.next_offset !== null) setPage({ slug, offset: data.next_offset })
+                  }}
+                >
+                  {t('Next page')}
+                </button>
               </div>
             )}
           </>

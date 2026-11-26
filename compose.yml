@@ -21,6 +21,7 @@ x-python: &python
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     networks: [data]
     environment:
       POSTGRES_PASSWORD: ${PG_PASSWORD:?run scripts/setup.sh first}
@@ -36,6 +37,7 @@ services:
       retries: 35
   mongo:
     image: mongo:7.0
+    restart: unless-stopped
     networks: [data]
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     volumes: [mongo:/data/db]
@@ -46,6 +48,7 @@ services:
       retries: 35
   redis:
     image: redis:7.4-alpine
+    restart: unless-stopped
     networks: [data]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?run scripts/setup.sh first}
@@ -58,6 +61,7 @@ services:
       retries: 25
   rabbit:
     image: rabbitmq:3.13-alpine
+    restart: unless-stopped
     hostname: rabbit
     networks: [data]
     environment:
@@ -65,7 +69,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBIT_PASSWORD:?run scripts/setup.sh first}
     volumes: [rabbit:/var/lib/rabbitmq]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
       timeout: 8s
       retries: 25

@@ -6,6 +6,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useLoad, useSession } from '../application/state'
 import {
   languageNames,
+  languages,
   typeNames,
   type Course,
   type CourseCard,
@@ -21,7 +22,7 @@ export function Catalog() {
   const [query, setQuery] = useSearchParams()
   const { user } = useSession()
   const current = query.get('language')
-  const language = current === 'python' || current === 'cpp' ? current : ''
+  const language = languages.find((value) => value === current) ?? ''
   const courses = useLoad<CourseCard[]>(`${language}:${user?.id ?? ''}`, () =>
     api(`/edu/courses${language ? `?language=${language}` : ''}`),
   )
@@ -71,18 +72,18 @@ export function Catalog() {
       <section id="courses" className="catalog-section">
         <div className="section-heading">
           <h2>{t('Course catalog')}</h2>
-          <div className="filters" aria-label={t('Programming language')}>
-            {(['', 'python', 'cpp'] as const).map((value) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={language === value}
-                onClick={() => setQuery(value ? { language: value } : {}, { replace: true })}
-              >
-                {value ? languageNames[value] : t('All languages')}
-              </button>
-            ))}
-          </div>
+          <label>
+            {t('Programming language')}
+            <select
+              value={language}
+              onChange={(e) => setQuery(e.target.value ? { language: e.target.value } : {}, { replace: true })}
+            >
+              <option value="">{t('All languages')}</option>
+              {languages.map((value) => (
+                <option key={value} value={value}>{languageNames[value]}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <Data state={courses}>
           {(items) =>
@@ -98,7 +99,7 @@ export function Catalog() {
                           <Braces aria-hidden />
                         )}
                       </span>
-                      <span className="chip">{languageNames[course.language]}</span>
+                      <span className="chip">{languageNames[course.language] ?? course.language}</span>
                     </div>
                     <h3>
                       <Link to={`/courses/${course.slug}`}>{course.title}</Link>
@@ -156,7 +157,7 @@ export function CoursePage() {
             {t('Catalog')}
           </Link>
           <PageHeading title={course.title}>
-            <span className="chip">{languageNames[course.language]}</span>
+            <span className="chip">{languageNames[course.language] ?? course.language}</span>
           </PageHeading>
           <p className="lead">{course.description}</p>
           <div className="row course-actions">
@@ -289,7 +290,7 @@ export function PublicProfile() {
 export function LanguageSelect({
   value,
   onChange,
-  options = ['python', 'cpp'],
+  options = languages,
 }: {
   value: Language
   onChange: (value: Language) => void
@@ -299,7 +300,8 @@ export function LanguageSelect({
   return (
     <label>
       {t('Programming language')}
-      <select value={value} onChange={(e) => onChange(e.target.value as Language)}>
+      <select required value={options.includes(value) ? value : ''} onChange={(e) => onChange(e.target.value as Language)}>
+        {!options.includes(value) && <option value="" disabled>{t('Choose a supported language')}</option>}
         {options.map((item) => (
           <option key={item} value={item}>
             {languageNames[item]}

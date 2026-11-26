@@ -92,7 +92,13 @@ function refresh(): Promise<string | null> {
   return pending
 }
 
-type Options = { method?: string; body?: unknown; retry?: boolean; signal?: AbortSignal }
+type Options = {
+  method?: string
+  body?: unknown
+  headers?: Record<string, string>
+  retry?: boolean
+  signal?: AbortSignal
+}
 export async function api<T>(path: string, options: Options = {}): Promise<T> {
   const response = await request(path, options)
   if (response.status === 204) return undefined as T
@@ -109,6 +115,7 @@ export async function request(path: string, options: Options = {}): Promise<Resp
       headers: {
         ...(token && { Authorization: `Bearer ${token}` }),
         ...(options.body !== undefined && { 'Content-Type': 'application/json' }),
+        ...options.headers,
       },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     })
@@ -154,9 +161,11 @@ export function connect(
         if (body.exp * 1000 <= Date.now() + 15_000) token = await refresh()
       }
       if (closed || !token) return
+      const { ticket } = await api<{ ticket: string }>('/auth/socket-ticket', { method: 'POST' })
+      if (closed) return
       const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
       socket = new WebSocket(
-        `${scheme}//${location.host}${path}?token=${encodeURIComponent(token)}`,
+        `${scheme}//${location.host}${path}?ticket=${encodeURIComponent(ticket)}`,
       )
       socket.onopen = () => {
         delay = 1000

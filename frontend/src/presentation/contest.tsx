@@ -139,7 +139,7 @@ function TaskPicker({
                 .map((task) => (
                   <option key={task.task_id} value={task.task_id} disabled={ids.length >= 26}>
                     {task.title} · {t(difficultyNames[task.difficulty])} ·{' '}
-                    {task.languages.map((language) => languageNames[language]).join(', ')}
+                    {task.languages.map((language) => languageNames[language] ?? language).join(', ')}
                   </option>
                 ))}
             </select>

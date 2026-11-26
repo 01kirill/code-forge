@@ -191,62 +191,84 @@ class Progress:
             )
         return result
 
-    async def gradebook(self, slug: str, user: User) -> Document:
+    async def gradebook(
+        self, slug: str, user: User, offset: int = 0, *, export: bool = False
+    ) -> Document:
         structure = await self.content.structure(slug, user, author=True)
         lessons = [
             lesson for module in structure["modules"] for lesson in module["lessons"]
         ]
         if not structure["published"]:
             lessons = []
-        rows = []
-        async for profile in self.store.course_profiles(slug):
-            completed = profile.get("completed", {})
-            task_xp_by_lesson: dict[str, int] = {}
-            for award in profile.get("solved", {}).values():
-                lesson_id = award.get("lesson_id")
-                if lesson_id:
-                    task_xp_by_lesson[lesson_id] = (
-                        task_xp_by_lesson.get(lesson_id, 0) + award["xp"]
-                    )
-            quiz_ids = await self.store.attempted_quizzes(
-                profile["id"],
+        rows: list[Document] = []
+        next_offset = None
+        while True:
+            profiles = [
+                profile
+                async for profile in self.store.course_profiles(slug, offset, 51)
+            ]
+            page = profiles[:50]
+            attempted = await self.store.attempted_lessons(
+                [profile["id"] for profile in page],
                 [lesson["id"] for lesson in lessons],
+                slug,
             )
-            tried = await self.store.attempted_practice(profile["id"], slug)
-            cells = []
-            for lesson in lessons:
-                id_ = lesson["id"]
-                status = (
-                    "completed"
-                    if id_ in completed
-                    else (
-                        "attempted" if id_ in quiz_ids or id_ in tried else "unstarted"
-                    )
+            rows.extend(
+                self.gradebook_row(
+                    profile, lessons, attempted.get(profile["id"], set())
                 )
-                cells.append(
-                    {
-                        "lesson_id": id_,
-                        "status": status,
-                        "xp": completed.get(id_, {}).get("xp", 0),
-                        "task_xp": task_xp_by_lesson.get(id_, 0),
-                    }
-                )
-            rows.append(
-                {
-                    "id": profile["id"],
-                    "name": profile["name"],
-                    "cells": cells,
-                    "percent": percent(
-                        sum(cell["status"] == "completed" for cell in cells),
-                        len(lessons),
-                    ),
-                }
+                for profile in page
             )
+            if len(profiles) <= 50:
+                break
+            offset += 50
+            if not export:
+                next_offset = offset
+                break
         return {
             "columns": [
                 {k: lesson[k] for k in ("id", "title", "type")} for lesson in lessons
             ],
             "rows": rows,
+            "next_offset": next_offset,
+        }
+
+    @staticmethod
+    def gradebook_row(
+        profile: Document, lessons: list[Document], tried: set[str]
+    ) -> Document:
+        completed = profile.get("completed", {})
+        task_xp_by_lesson: dict[str, int] = {}
+        for award in profile.get("solved", {}).values():
+            lesson_id = award.get("lesson_id")
+            if lesson_id:
+                task_xp_by_lesson[lesson_id] = (
+                    task_xp_by_lesson.get(lesson_id, 0) + award["xp"]
+                )
+        cells = []
+        for lesson in lessons:
+            id_ = lesson["id"]
+            status = (
+                "completed"
+                if id_ in completed
+                else ("attempted" if id_ in tried else "unstarted")
+            )
+            cells.append(
+                {
+                    "lesson_id": id_,
+                    "status": status,
+                    "xp": completed.get(id_, {}).get("xp", 0),
+                    "task_xp": task_xp_by_lesson.get(id_, 0),
+                }
+            )
+        return {
+            "id": profile["id"],
+            "name": profile["name"],
+            "cells": cells,
+            "percent": percent(
+                sum(cell["status"] == "completed" for cell in cells),
+                len(lessons),
+            ),
         }
 
     async def leaderboard(self, offset: int) -> list[Document]:

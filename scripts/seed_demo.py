@@ -140,8 +140,13 @@ async def course(
         )
         modules[index]["lessons"].append(added["id"])
     if publish:
+        detail = await call(client, "GET", f"/edu/courses/{slug}?author=true")
         await call(
-            client, "PATCH", f"/edu/courses/{slug}", json=spec | {"published": True}
+            client,
+            "PATCH",
+            f"/edu/courses/{slug}",
+            headers={"If-Match": f'"{detail["revision"]}"'},
+            json=spec | {"published": True},
         )
 
 

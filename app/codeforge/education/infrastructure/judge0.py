@@ -5,12 +5,11 @@ from typing import Any
 
 import httpx
 
-from codeforge.common.contracts import Document
+from codeforge.common.contracts import JUDGE_LANGUAGES, Document
 from codeforge.education.application.ports import JudgeUnavailable
 from codeforge.education.domain import Verdict
 from codeforge.education.domain.verdicts import Case, Execution
 
-LANGUAGE_NAMES = {"python": "Python (3.8.1)", "cpp": "C++ (GCC 9.2.0)"}
 TERMINAL_STATUS = {
     3: Verdict.AC,
     4: Verdict.WA,
@@ -98,9 +97,9 @@ class Judge:
             response = await self.request("GET", "/languages")
             available = {entry["name"]: entry["id"] for entry in response.json()}
             self.languages = {
-                key: available[name]
-                for key, name in LANGUAGE_NAMES.items()
-                if name in available
+                key: available[spec["name"]]
+                for key, spec in JUDGE_LANGUAGES.items()
+                if spec["name"] in available
             }
         if language not in self.languages:
             raise JudgeUnavailable
@@ -111,7 +110,7 @@ class Judge:
             "cpu_time_limit": time_limit,
             "wall_time_limit": max(2, time_limit + 2),
             "memory_limit": task["memory_kb"],
-            "max_processes_and_or_threads": 16,
+            "max_processes_and_or_threads": 60,
             "max_file_size": 128,
             "enable_network": False,
         }

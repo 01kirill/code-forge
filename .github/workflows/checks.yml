@@ -41,13 +41,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: ./scripts/setup.sh
-      - run: docker compose -f compose.yml -f compose.test.yml up --build -d
+      - run: sh scripts/setup.sh
+      - run: docker compose -f compose.yml -f compose.test.yml build auth gateway
+      - run: docker compose -f compose.yml -f compose.test.yml up --no-build -d
       - run: |
           for tries in $(seq 1 40); do
             if curl -fsS http://localhost:8080/api/edu/courses >/dev/null; then break; fi
             sleep 2
           done
+          curl -fsS http://localhost:8080/api/edu/courses >/dev/null
           docker compose exec -T -e CODEFORGE_ADMIN_PASSWORD auth python -m codeforge.auth.bootstrap --name test_admin --email "$CODEFORGE_TEST_ADMIN"
           uv run --locked python scripts/seed_demo.py --admin "$CODEFORGE_TEST_ADMIN"
           uv run --locked pytest -m integration

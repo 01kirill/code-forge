@@ -1,0 +1,13 @@
+services:
+  education-worker:
+    image: codeforge-backend:local
+    profiles: [same-host]
+  judge-server:
+    networks: [execution, judge-data, judge-edge]
+    ports:
+      - "${JUDGE_PRIVATE_IP:?set the private VPC IPv4}:2358:2358"
+
+networks:
+  data:
+    internal: true
+  judge-edge:

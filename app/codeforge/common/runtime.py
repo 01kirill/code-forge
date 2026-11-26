@@ -69,7 +69,9 @@ async def postgres(url: str) -> AsyncIterator[asyncpg.Pool]:
 
 
 @asynccontextmanager
-async def recurring(*jobs: BackgroundJob) -> AsyncIterator[None]:
+async def recurring(
+    *jobs: BackgroundJob, interval: float = 0.35
+) -> AsyncIterator[None]:
     async def repeat(job: BackgroundJob) -> None:
         operation = job.func if isinstance(job, partial) else job
         name = getattr(operation, "__qualname__", type(operation).__name__)
@@ -78,7 +80,7 @@ async def recurring(*jobs: BackgroundJob) -> AsyncIterator[None]:
                 await job()
             except Exception as exc:
                 logger.warning("%s failed: %s", name, type(exc).__name__)
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(interval)
 
     tasks = [asyncio.create_task(repeat(job)) for job in jobs]
     try:
@@ -91,7 +93,7 @@ async def recurring(*jobs: BackgroundJob) -> AsyncIterator[None]:
 
 async def socket_user(ws: WebSocket) -> User:
     tokens: Tokens = ws.app.state.tokens
-    return await tokens.verify(ws.query_params.get("token", ""))
+    return await tokens.use_socket_ticket(ws.query_params.get("ticket", ""))
 
 
 async def stream(ws: WebSocket, user: User, *channels: str) -> None:

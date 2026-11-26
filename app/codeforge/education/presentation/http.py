@@ -52,6 +52,7 @@ Courses = Annotated[Content, Depends(get_content)]
 Tracking = Annotated[Progress, Depends(get_progress)]
 Attempts = Annotated[Submissions, Depends(get_submissions)]
 Offset = Annotated[int, Query(ge=0, le=10000)]
+CourseRevision = Annotated[str | None, Header(alias="If-Match", max_length=34)]
 
 
 @router.get("/courses")
@@ -96,8 +97,14 @@ async def edit_course(
     data: CourseEdit,
     service: Courses,
     user: CurrentUser,
+    revision: CourseRevision = None,
 ) -> Document:
-    return await service.mutate_course(slug, cast(CourseDraft, data.model_dump()), user)
+    return await service.mutate_course(
+        slug,
+        cast(CourseDraft, data.model_dump()),
+        user,
+        revision=revision.strip('"') if revision else None,
+    )
 
 
 @router.delete("/courses/{slug}", status_code=204)
@@ -117,10 +124,17 @@ async def lesson(lesson_id: str, service: Courses, user: CurrentUser) -> Documen
 
 @router.post("/lessons", status_code=201)
 async def create_lesson(
-    data: LessonCreate, service: Courses, user: CurrentUser
+    data: LessonCreate,
+    service: Courses,
+    user: CurrentUser,
+    revision: CourseRevision = None,
 ) -> Document:
     return await service.write_lesson(
-        data.course_slug, data.module, data.lesson.model_dump(), user
+        data.course_slug,
+        data.module,
+        data.lesson.model_dump(),
+        user,
+        revision=revision.strip('"') if revision else None,
     )
 
 
@@ -130,20 +144,36 @@ async def edit_lesson(
     data: Lesson,
     service: Courses,
     user: CurrentUser,
+    revision: CourseRevision = None,
 ) -> Document:
     slug = await service.lesson_slug(lesson_id)
-    return await service.write_lesson(slug, None, data.model_dump(), user, lesson_id)
+    return await service.write_lesson(
+        slug,
+        None,
+        data.model_dump(),
+        user,
+        lesson_id,
+        revision=revision.strip('"') if revision else None,
+    )
 
 
 @router.delete("/lessons/{lesson_id}", status_code=204)
-async def delete_lesson(lesson_id: str, service: Courses, user: CurrentUser) -> None:
-    await service.write_lesson(
+async def delete_lesson(
+    lesson_id: str,
+    service: Courses,
+    user: CurrentUser,
+    response: Response,
+    revision: CourseRevision = None,
+) -> None:
+    change = await service.write_lesson(
         await service.lesson_slug(lesson_id),
         None,
         None,
         user,
         lesson_id,
+        revision=revision.strip('"') if revision else None,
     )
+    response.headers["ETag"] = f'"{change["revision"]}"'
 
 
 @router.post("/lessons/{lesson_id}/complete")
@@ -274,8 +304,11 @@ async def gradebook(
     service: Tracking,
     user: CurrentUser,
     format: str = "json",
+    offset: Offset = 0,
 ) -> Document | Response:
-    data = await service.gradebook(slug, user)
+    data = await service.gradebook(
+        slug, user, 0 if format == "csv" else offset, export=format == "csv"
+    )
     if format == "csv":
         return Response(
             csv_gradebook(data),

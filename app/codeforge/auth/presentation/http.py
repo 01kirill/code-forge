@@ -13,7 +13,7 @@ from codeforge.auth.presentation.schemas import (
 )
 from codeforge.common.contracts import Document, Problem
 from codeforge.common.http import ErrorResponse
-from codeforge.common.security import CurrentUser
+from codeforge.common.security import CurrentUser, Tokens
 
 COOKIE = "cf_refresh"
 
@@ -57,8 +57,10 @@ RefreshCookie = Annotated[str | None, Cookie(alias=COOKIE, max_length=100)]
 
 
 @router.post("/register", status_code=201)
-async def register(data: Registration, service: Service) -> Document:
-    user = await service.register(data.email, data.name, data.password)
+async def register(data: Registration, request: Request, service: Service) -> Document:
+    origin_check(request)
+    ip = request.client.host if request.client else "unknown"
+    user = await service.register(data.email, data.name, data.password, ip=ip)
     return {"id": user["id"], "name": user["name"]}
 
 
@@ -69,6 +71,7 @@ async def login(
     response: Response,
     service: Service,
 ) -> AccessToken:
+    origin_check(request)
     ip = request.client.host if request.client else "unknown"
     return set_session(
         request,
@@ -89,6 +92,7 @@ async def refresh(
     service: Service,
     token: RefreshCookie = None,
 ) -> AccessToken:
+    origin_check(request)
     if not token:
         raise Problem(401, "session", "Войдите в аккаунт")
     return set_session(
@@ -99,6 +103,23 @@ async def refresh(
             request.headers.get("user-agent", ""),
         ),
     )
+
+
+def origin_check(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if (origin and origin != str(request.base_url).rstrip("/")) or (
+        request.headers.get("sec-fetch-site") in {"cross-site", "same-site"}
+    ):
+        raise Problem(403, "forbidden", "Недопустимый источник запроса")
+
+
+@router.post("/socket-ticket")
+async def socket_ticket(
+    request: Request, response: Response, user: CurrentUser
+) -> Document:
+    tokens: Tokens = request.app.state.tokens
+    response.headers["Cache-Control"] = "no-store"
+    return {"ticket": await tokens.socket_ticket(user)}
 
 
 @router.post("/logout", status_code=204)

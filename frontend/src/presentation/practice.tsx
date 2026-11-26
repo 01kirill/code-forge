@@ -5,11 +5,17 @@ import { Link, useParams } from 'react-router-dom'
 import Markdown from 'react-markdown'
 import hljs from 'highlight.js/lib/core'
 import cpp from 'highlight.js/lib/languages/cpp'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import javascript from 'highlight.js/lib/languages/javascript'
+import rust from 'highlight.js/lib/languages/rust'
 import python from 'highlight.js/lib/languages/python'
 
 import { useEducation, useLoad, useSession } from '../application/state'
 import {
   languageNames,
+  languageSyntax,
+  languages as supportedLanguages,
   verdictLabels,
   type Attempt,
   type Language,
@@ -22,11 +28,14 @@ import { LanguageSelect } from './catalog'
 import { Data, Empty, ErrorMessage, Loading, PageHeading, useAction } from './ui'
 
 const Monaco = lazy(() => import('./monaco'))
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('cpp', cpp)
+for (const [language, syntax] of Object.entries({ python, cpp, javascript, java, go, rust })) {
+  hljs.registerLanguage(language, syntax)
+}
 
 function Highlighted({ code, language }: { code: string; language: Language }) {
-  const highlighted = hljs.highlight(code, { language }).value
+  const syntax = languageSyntax(language)
+  if (!hljs.getLanguage(syntax)) return <pre className="output"><code>{code}</code></pre>
+  const highlighted = hljs.highlight(code, { language: syntax }).value
   return (
     <pre className="output">
       <code dangerouslySetInnerHTML={{ __html: highlighted }} />
@@ -175,7 +184,7 @@ export function AttemptHistory({
                           </button>
                         </td>
                         <td>{item.task_title ?? item.label}</td>
-                        <td>{languageNames[item.language]}</td>
+                        <td>{languageNames[item.language] ?? item.language}</td>
                         <td>
                           <VerdictText attempt={item} />
                         </td>
@@ -264,9 +273,9 @@ export function Practice({
   preferredLanguage?: Language
 }) {
   const { t } = useTranslation()
-  const languages = (['python', 'cpp'] as const).filter((language) => language in task.templates)
+  const languages = supportedLanguages.filter((language) => language in task.templates)
   const [language, setLanguage] = useState<Language>(() =>
-    preferredLanguage && languages.includes(preferredLanguage) ? preferredLanguage : languages[0],
+    preferredLanguage && languages.includes(preferredLanguage) ? preferredLanguage : languages[0] ?? supportedLanguages[0],
   )
   const [drafts, setDrafts] = useState<Partial<Record<Language, string>>>(() => {
     try {
@@ -379,7 +388,7 @@ export function Practice({
           </div>
         ))}
       </section>
-      <section className="panel editor-panel">
+      {languages.length ? <section className="panel editor-panel">
         <div className="row spread">
           <h2>{t('Source code')}</h2>
           <LanguageSelect value={language} onChange={setLanguage} options={languages} />
@@ -454,7 +463,10 @@ export function Practice({
         )}
         <ErrorMessage error={action.error} />
         {attempt && <ResultPanel attempt={attempt} run={isRun} />}
-      </section>
+      </section> : <section className="panel editor-panel">
+        <p>{t('This task has no supported programming languages.')}</p>
+        {attempt && <ResultPanel attempt={attempt} run={isRun} />}
+      </section>}
     </div>
   )
 }

@@ -3,6 +3,7 @@
 from uuid import uuid4
 
 from codeforge.common.broker import Document
+from codeforge.common.contracts import JUDGE_LANGUAGES
 from codeforge.education.infrastructure.judge0 import encode
 from fastapi import FastAPI
 
@@ -18,12 +19,15 @@ CORRECT = {
             "#include <iostream>\nint main(){int a,b;std::cin>>a>>b;std::cout<<a+b;}"
         ),
     },
+    63: {encode("console.log(3)")},
 }
 
 
 @app.get("/languages")
 async def languages() -> list[Document]:
-    return [{"name": "Python (3.8.1)", "id": 71}, {"name": "C++ (GCC 9.2.0)", "id": 54}]
+    return [
+        {"name": spec["name"], "id": spec["id"]} for spec in JUDGE_LANGUAGES.values()
+    ]
 
 
 @app.post("/submissions/batch", status_code=201)

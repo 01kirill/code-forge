@@ -8,6 +8,8 @@ from uuid import uuid4
 import httpx
 import pytest
 from codeforge.common.broker import Document
+from websockets.asyncio.client import connect
+from websockets.exceptions import InvalidStatus
 
 pytestmark = pytest.mark.integration
 BASE = os.getenv("CODEFORGE_TEST_URL")
@@ -97,6 +99,130 @@ async def test_registration_and_refresh_reuse() -> None:
         ] == "session_reused"
         assert (await second.post("/api/auth/refresh")).status_code == 401
         assert (await second.get("/api/edu/me/profile")).status_code == 401
+
+
+async def test_session_ticket_and_logout() -> None:
+    async with client() as http:
+        await student(http)
+        cross_origin = await http.post(
+            "/api/auth/refresh", headers={"Origin": "https://unrelated.invalid"}
+        )
+        assert cross_origin.status_code == 403
+        ticket = (await post_json(http, "/auth/socket-ticket", {}, 200))["ticket"]
+        socket = str(http.base_url).rstrip("/").replace("http", "ws", 1)
+        address = f"{socket}/ws/edu?ticket={ticket}"
+        async with connect(address):
+            pass
+        with pytest.raises(InvalidStatus):
+            async with connect(address):
+                pass
+        await post_json(http, "/auth/logout", {}, 204)
+        assert (await http.get("/api/edu/me/profile")).status_code == 401
+
+
+async def test_javascript_course_and_stale_revision() -> None:
+    if not DEMO:
+        pytest.skip("Seed the demo catalog and set CODEFORGE_DEMO_PASSWORD")
+    async with client() as teacher, client() as learner:
+        await login(teacher, "teacher@example.com", DEMO)
+        slug = f"javascript-{uuid4().hex[:10]}"
+        spec: Document = {
+            "slug": slug,
+            "title": "JavaScript course",
+            "description": "Test course",
+            "language": "javascript",
+            "topics": ["Basics"],
+            "modules": [{"title": "Basics", "lessons": []}],
+        }
+        before = await post_json(teacher, "/edu/courses", spec, 201)
+        task = await post_json(
+            teacher,
+            "/edu/tasks",
+            {
+                "title": "JavaScript test",
+                "statement": "Print 3",
+                "difficulty": "easy",
+                "templates": {"javascript": "// print the answer"},
+                "time_ms": 1000,
+                "memory_kb": 65536,
+                "contest_ready": True,
+                "tests": [{"stdin": "", "expected": "3", "public": True}],
+            },
+            201,
+        )
+        lesson = await post_json(
+            teacher,
+            "/edu/lessons",
+            {
+                "course_slug": slug,
+                "module": 0,
+                "lesson": {
+                    "title": "Print 3",
+                    "topic": "Basics",
+                    "type": "practice",
+                    "task_id": task["task_id"],
+                },
+            },
+            201,
+        )
+        endpoint = f"/api/edu/courses/{slug}"
+        stale = await teacher.patch(
+            endpoint,
+            json=spec,
+            headers={"If-Match": f'"{before["revision"]}"'},
+        )
+        assert stale.status_code == 409
+        spec["modules"][0]["lessons"] = [lesson["id"]]
+        published = await teacher.patch(
+            endpoint,
+            json=spec | {"published": True},
+            headers={"If-Match": f'"{lesson["revision"]}"'},
+        )
+        assert published.status_code == 200, published.text
+        await student(learner)
+        await post_json(learner, f"/edu/courses/{slug}/enroll", {}, 204)
+        attempt = await post_json(
+            learner,
+            f"/edu/tasks/{task['task_id']}/submissions",
+            {
+                "lesson_id": lesson["id"],
+                "language": "javascript",
+                "code": "console.log(3)",
+            },
+            202,
+        )
+        assert (await await_result(learner, f"/edu/submissions/{attempt['id']}"))[
+            "verdict"
+        ] == "AC"
+
+        room = await post_json(
+            learner,
+            "/contest/contests",
+            {"title": "JavaScript contest", "duration": 5, "description": ""},
+            201,
+        )
+        base = f"/contest/contests/{room['id']}"
+        response = await learner.put(
+            f"/api{base}/problems", json={"task_ids": [task["task_id"]]}
+        )
+        assert response.status_code == 200, response.text
+        await post_json(learner, f"{base}/start", {}, 200)
+        async with asyncio.timeout(15):
+            for _ in range(60):
+                if (await get(learner, base))["state"] == "running":
+                    break
+                await asyncio.sleep(0.25)
+            else:
+                pytest.fail("JavaScript contest did not start")
+        attempt = await post_json(
+            learner,
+            f"{base}/problems/A/submissions",
+            {"language": "javascript", "code": "console.log(3)"},
+            202,
+        )
+        assert (await await_result(learner, f"{base}/submissions/{attempt['id']}"))[
+            "verdict"
+        ] == "AC"
 
 
 async def test_gaming_profile_and_gradebook() -> None:

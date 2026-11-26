@@ -1,11 +1,11 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from pymongo import AsyncMongoClient, ReturnDocument
 from pymongo.asynchronous.client_session import AsyncClientSession
 from pymongo.errors import DuplicateKeyError
 
-from codeforge.common.contracts import Document, User
+from codeforge.common.contracts import QUEUE_LIMIT, Document, User, check_queue
 from codeforge.education.application.ports import DuplicateCourse, EducationData
 
 
@@ -38,6 +38,7 @@ class MongoEducationData:
         self._profiles = db.user_profiles
         self._quizzes = db.quiz_attempts
         self._judgements = db.judgements
+        self._admission = db.admission
 
     async def course(self, slug: str) -> Document | None:
         row = await self._courses.find_one(
@@ -181,19 +182,37 @@ class MongoEducationData:
     async def add_quiz_attempt(self, submission: Document) -> None:
         await self._quizzes.insert_one(submission, session=self.session)
 
-    async def attempted_quizzes(self, user: str, lessons: list[str]) -> list[str]:
-        return await self._quizzes.distinct(
-            "lesson_id",
-            {"user_id": user, "lesson_id": {"$in": lessons}},
-            session=self.session,
-        )
-
-    async def attempted_practice(self, user: str, course: str) -> list[str]:
-        return await self._submissions.distinct(
-            "lesson_id",
-            {"user_id": user, "course_slug": course, "practice": False},
-            session=self.session,
-        )
+    async def attempted_lessons(
+        self, users: list[str], lessons: list[str], course: str
+    ) -> dict[str, set[str]]:
+        result: dict[str, set[str]] = {}
+        if not users or not lessons:
+            return result
+        for collection, extra in (
+            (self._quizzes, {}),
+            (self._submissions, {"course_slug": course, "practice": False}),
+        ):
+            cursor = await collection.aggregate(
+                [
+                    {
+                        "$match": {
+                            "user_id": {"$in": users},
+                            "lesson_id": {"$in": lessons},
+                            **extra,
+                        }
+                    },
+                    {
+                        "$group": {
+                            "_id": "$user_id",
+                            "lessons": {"$addToSet": "$lesson_id"},
+                        }
+                    },
+                ],
+                session=self.session,
+            )
+            async for row in cursor:
+                result.setdefault(row["_id"], set()).update(row["lessons"])
+        return result
 
     async def find_profile(self, user_id: str) -> Document | None:
         row = await self._profiles.find_one({"_id": user_id}, session=self.session)
@@ -216,10 +235,20 @@ class MongoEducationData:
             session=self.session,
         )
 
-    async def course_profiles(self, slug: str) -> AsyncIterator[Document]:
-        async for row in self._profiles.find(
-            {"courses": slug}, session=self.session
-        ).sort([("name", 1), ("_id", 1)]):
+    async def course_profiles(
+        self, slug: str, offset: int, limit: int
+    ) -> AsyncIterator[Document]:
+        cursor = (
+            self._profiles.find(
+                {"courses": slug},
+                {"name": 1, "completed": 1, "solved": 1},
+                session=self.session,
+            )
+            .sort([("name", 1), ("_id", 1)])
+            .skip(offset)
+            .limit(limit)
+        )
+        async for row in cursor:
             yield from_mongo(row)
 
     async def ranked_profiles(self, offset: int) -> list[Document]:
@@ -254,6 +283,28 @@ class MongoEducationData:
     async def add_submission(self, attempt: Document) -> None:
         await self._submissions.insert_one(to_mongo(attempt), session=self.session)
 
+    async def reserve_submission(self) -> None:
+        # All admissions write one document so Mongo retries concurrent transactions.
+        await self._admission.update_one(
+            {"_id": "submissions"}, {"$inc": {"revision": 1}}, session=self.session
+        )
+        check_queue(
+            await self._submissions.count_documents(
+                {"state": "queued"}, limit=QUEUE_LIMIT, session=self.session
+            )
+        )
+
+    async def queue_status(self) -> tuple[int, datetime | None]:
+        rows = self._submissions.find(
+            {"state": "queued"}, {"submitted_at": 1}, session=self.session
+        )
+        count, oldest = 0, None
+        async for row in rows:
+            value = row["submitted_at"]
+            oldest = value if oldest is None else min(oldest, value)
+            count += 1
+        return count, oldest
+
     async def submission(self, id_: str, user_id: str) -> Document | None:
         row = await self._submissions.find_one(
             {"_id": id_, "user_id": user_id},
@@ -275,9 +326,27 @@ class MongoEducationData:
             .limit(30)
         ]
 
-    async def task_history(self, user: str, task: str) -> AsyncIterator[Document]:
+    async def task_history(
+        self, user: str, task: str, after: int
+    ) -> AsyncIterator[Document]:
         async for row in self._submissions.find(
-            {"user_id": user, "task_id": task, "practice": False},
+            {
+                "user_id": user,
+                "task_id": task,
+                "practice": False,
+                "sequence": {"$gt": after},
+            },
+            {
+                "_id": 0,
+                "sequence": 1,
+                "state": 1,
+                "result.verdict": 1,
+                "task_id": 1,
+                "lesson_id": 1,
+                "submitted_at": 1,
+                "timezone": 1,
+                "difficulty": 1,
+            },
             session=self.session,
         ).sort("sequence"):
             yield from_mongo(row)
@@ -347,7 +416,12 @@ class MongoEducationData:
     async def finish_judgement(self, id_: str, lease: str, result: Document) -> bool:
         update = await self._judgements.update_one(
             {"_id": id_, "lease": lease},
-            {"$set": {"result": result}},
+            {
+                "$set": {
+                    "result": result,
+                    "purge_at": datetime.now(UTC) + timedelta(days=7),
+                }
+            },
             session=self.session,
         )
         return bool(update.modified_count)
@@ -364,6 +438,9 @@ class MongoEducation(MongoEducationData):
             return await session.with_transaction(execute)
 
     async def initialize(self) -> None:
+        await self._admission.update_one(
+            {"_id": "submissions"}, {"$setOnInsert": {"revision": 0}}, upsert=True
+        )
         await self._courses.create_index("slug", unique=True)
         await self._courses.create_index(
             [("published", 1), ("language", 1), ("title", 1)]
@@ -380,8 +457,13 @@ class MongoEducation(MongoEducationData):
         await self._submissions.create_index([("user_id", 1), ("sequence", -1)])
         await self._submissions.create_index([("state", 1), ("dispatch_after", 1)])
         await self._submissions.create_index("expires_at", expireAfterSeconds=0)
+        await self._judgements.create_index("purge_at", expireAfterSeconds=0)
         await self._profiles.create_index([("active", 1), ("xp", -1), ("name", 1)])
-        await self._profiles.create_index("courses")
+        await self._profiles.create_index([("courses", 1), ("name", 1), ("_id", 1)])
+        await self._quizzes.create_index([("user_id", 1), ("lesson_id", 1)])
+        await self._submissions.create_index(
+            [("user_id", 1), ("course_slug", 1), ("practice", 1), ("lesson_id", 1)]
+        )
 
     async def ensure_profile(self, user: User) -> None:
         profile = {
